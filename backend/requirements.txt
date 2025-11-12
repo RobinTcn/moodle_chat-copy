@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+selenium
+beautifulsoup4
+requests

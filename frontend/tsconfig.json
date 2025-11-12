@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES6",                          // Ziel: moderne JavaScript-Version
+    "lib": ["dom", "dom.iterable", "esnext"], // Benötigte Bibliotheken
+    "allowJs": true,                           // JS-Dateien erlaubt
+    "jsx": "react-jsx",                        // React JSX-Syntax
+    "module": "esnext",                        // ES Module
+    "moduleResolution": "node",                // Node-Modulauflösung
+    "strict": true,                            // Strikte Typprüfung
+    "esModuleInterop": true,                   // Für Default-Imports
+    "skipLibCheck": true,                       // Bibliotheken-Typen ignorieren
+    "forceConsistentCasingInFileNames": true, // Einheitliche Dateinamen
+    "noFallthroughCasesInSwitch": true,       // Vermeidung von Fehlern in switch
+    "resolveJsonModule": true                  // JSON-Importe erlaubt
+  },
+  "include": ["src", "../src"],                         // Alle TS/TSX Dateien im src-Ordner (lokal und gemeinsamer src)
+  "exclude": ["node_modules", "build"]       // Ausschließen
+}
