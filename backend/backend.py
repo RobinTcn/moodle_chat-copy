@@ -132,20 +132,219 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Aktuelle Termine')]") ))
 
         html = driver.page_source
-        soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text(separator="\n", strip=True)
-        match = re.search(r"(?<=Aktuelle Termine)(.*?)(?=Zum Kalender)", text, re.DOTALL)
-        if not match:
-            return "❗ Abschnitt nicht gefunden."
 
-        # Extract matched block and clean common UI/skip-link artifacts that sometimes
-        # appear right after the heading (for example 'überspringen' or 'Zum Inhalt').
-        block = match.group(1).strip()
-        # Remove leading accessibility/skip-link words like 'überspringen' or 'zum inhalt springen'
-        block = re.sub(r"(?i)^\s*(?:überspringen\b[:\-\–\—]?\s*|zum inhalt springen\b[:\-\–\—]?\s*|zum inhalt\b[:\-\–\—]?\s*)", "", block)
-        # Also guard against accidentally included repeated headings
-        block = re.sub(r"(?i)^\s*Aktuelle Termine\s*[:\-\–\—]?\s*", "", block)
-        return block if block else "❗ Abschnitt nicht gefunden."
+        # Verwende Selenium, um aria-labels direkt aus dem DOM zu lesen. Das ist
+        # robuster bei dynamischem Inhalt als nur BeautifulSoup auf page_source.
+        aria_texts = []
+        date_pattern = re.compile(r"\b\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4}\b")
+        try:
+            # Versuche zuerst, den 'Aktuelle Termine' Abschnitt per Selenium zu finden
+            try:
+                heading_el = driver.find_element(By.XPATH, "//*[contains(text(), 'Aktuelle Termine')]")
+            except Exception:
+                heading_el = None
+
+            section_aria = []
+            if heading_el:
+                # Nimm den ersten übergeordneten Abschnitt oder div als Container
+                try:
+                    container = heading_el.find_element(By.XPATH, "ancestor::section[1]")
+                except Exception:
+                    try:
+                        container = heading_el.find_element(By.XPATH, "ancestor::div[1]")
+                    except Exception:
+                        container = None
+
+                if container:
+                    nodes = container.find_elements(By.CSS_SELECTOR, "[aria-label]")
+                    for n in nodes:
+                        try:
+                            lbl = n.get_attribute("aria-label")
+                        except Exception:
+                            lbl = None
+                        if lbl:
+                            # Filter: nur relevante labels mit Datum oder dem Wort 'fällig'
+                            if 'fällig' in lbl.lower() or date_pattern.search(lbl):
+                                section_aria.append(lbl)
+
+            # Fallback: wenn im Abschnitt nichts gefunden wurde, sammle seitenweit
+            if not section_aria:
+                nodes = driver.find_elements(By.CSS_SELECTOR, "[aria-label]")
+                for n in nodes:
+                    try:
+                        lbl = n.get_attribute("aria-label")
+                    except Exception:
+                        lbl = None
+                    if not lbl:
+                        continue
+                    ll = lbl.lower()
+                    # ignore UI controls like filter buttons
+                    if 'filteroption' in ll or ll.strip() == 'überfällig' or ll.strip().startswith('überfällig filter'):
+                        continue
+                    if 'fällig' in ll or date_pattern.search(lbl):
+                        aria_texts.append(lbl)
+            else:
+                aria_texts = section_aria
+        except Exception as e:
+            logging.warning("Fehler beim Sammeln von aria-labels via Selenium: %s", e)
+
+        # Ergänze den sichtbaren Text (für Fälle, in denen Termine als Text sichtbar sind)
+        soup = BeautifulSoup(html, "html.parser")
+        visible_text = soup.get_text(separator="\n", strip=True)
+
+        if aria_texts:
+            # Baue einen kombinierten Text: sichtbarer Abschnittstext + gefundene aria-labels
+            text = visible_text + "\n\n" + "\n".join(aria_texts)
+        else:
+            text = visible_text
+
+        # Vollständigen Text in Datei speichern (Verzeichnis kann über SCRAPE_SAVE_DIR gesetzt werden)
+        try:
+            save_dir = os.getenv("logs") or os.path.join(os.path.dirname(__file__), "scraped_pages")
+            os.makedirs(save_dir, exist_ok=True)
+            fname = "moodle_page_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
+            save_path = os.path.join(save_dir, fname)
+            with open(save_path, "w", encoding="utf-8", errors="replace") as f:
+                f.write(text)
+            logging.info("Seiten-Text gespeichert: %s", save_path)
+        except Exception as e:
+            logging.warning("Konnte Seite nicht speichern: %s", e)
+
+        # Versuche, den Abschnitt zwischen 'Aktuelle Termine' und 'Zum Kalender' zu extrahieren
+        match = re.search(r"(?<=Aktuelle Termine)(.*?)(?=Zum Kalender)", text, re.DOTALL)
+        if match:
+            block = match.group(1).strip()
+            # Remove leading accessibility/skip-link words like 'überspringen' or 'zum inhalt springen'
+            block = re.sub(r"(?i)^\s*(?:überspringen\b[:\-\–\—]?\s*|zum inhalt springen\b[:\-\–\—]?\s*|zum inhalt\b[:\-\–\—]?\s*)", "", block)
+            block = re.sub(r"(?i)^\s*Aktuelle Termine\s*[:\-\–\—]?\s*", "", block)
+        else:
+            # Fallback: nutze die kombinierten aria-labels falls vorhanden, sonst die gesamte sichtbare Seite
+            if aria_texts:
+                block = "\n".join(aria_texts)
+            else:
+                block = visible_text
+
+        # Jetzt: parse mögliche Termin-Zeilen aus `block`.
+        # Ziel: eine robuste Extraktion von Aktivität, Modul und Fälligkeitsdatum/-zeit
+        month_map = {
+            'januar':1,'februar':2,'märz':3,'maerz':3,'april':4,'mai':5,'juni':6,'juli':7,'august':8,'september':9,'oktober':10,'november':11,'dezember':12
+        }
+
+        def parse_date_from_text(s: str):
+            # Suche nach Mustern wie '16. November 2025' und optionaler Uhrzeit '23:59'
+            m = re.search(r"(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})(?:[,\s]+(\d{1,2}:\d{2}))?", s)
+            if not m:
+                return None
+            day = int(m.group(1))
+            month_name = m.group(2).lower()
+            year = int(m.group(3))
+            time_part = m.group(4)
+            month = month_map.get(month_name)
+            if not month:
+                return None
+            try:
+                if time_part:
+                    hh, mm = map(int, time_part.split(':'))
+                    dt = datetime.datetime(year, month, day, hh, mm)
+                else:
+                    dt = datetime.datetime(year, month, day)
+                return dt.isoformat(sep=' ')
+            except Exception:
+                return None
+
+        def parse_line_into_entry(line: str):
+            # Entferne überflüssige Whitespace
+            s = re.sub(r"\s+", " ", line).strip()
+            if not s:
+                return None
+
+            # Versuche Datum zu extrahieren
+            date_iso = parse_date_from_text(s)
+
+            # Versuche, Aktivität und Kurs/Modul zu ermitteln
+            # Many labels use ' in <Kurs>' or ' - <Aktivität> in <Kurs>' or similar
+            activity = ''
+            course = ''
+
+            # Split before ' ist ' or before the date if present
+            split_point = None
+            m_ist = re.search(r"\bist\b|\bist\s+am\b|\bfällig\b", s, re.I)
+            if m_ist:
+                split_point = m_ist.start()
+            elif date_iso:
+                # find where the date text starts and cut there
+                dm = re.search(r"(\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4})", s)
+                if dm:
+                    split_point = dm.start()
+
+            left = s if split_point is None else s[:split_point].strip()
+
+            # If left contains ' in ', take last ' in ' as separator between activity and course
+            if ' in ' in left:
+                parts = left.rsplit(' in ', 1)
+                activity = parts[0].strip(" -:\t")
+                course = parts[1].strip(" -:\t")
+            else:
+                # Try other separators like ' - '
+                if ' - ' in left:
+                    parts = left.split(' - ', 1)
+                    activity = parts[0].strip()
+                    course = parts[1].strip()
+                else:
+                    activity = left
+
+            # Cleanup words like leading 'Aktivität' etc.
+            activity = re.sub(r"(?i)^Aktivit\w+\s*[:\-\–\—]?\s*", "", activity).strip()
+
+            return {
+                'activity': activity or None,
+                'course': course or None,
+                'due_iso': date_iso,
+                'original': s
+            }
+
+        entries = []
+        # Zerlege Block in Zeilen und untersuche jede
+        for line in block.splitlines():
+            # pick lines containing keyword 'fällig' or a date pattern
+            lower_line = line.lower()
+            # filter out obvious UI strings (e.g. 'Überfällig Filteroption')
+            if 'filteroption' in lower_line or lower_line.strip() == 'überfällig' or lower_line.strip().startswith('überfällig filter'):
+                continue
+            if 'fällig' in lower_line or re.search(r"\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4}", line):
+                e = parse_line_into_entry(line)
+                if e:
+                    entries.append(e)
+
+        # Wenn keine Einträge gefunden wurden, versuche heuristisch alle aria_texts
+        if not entries and aria_texts:
+            for lbl in aria_texts:
+                e = parse_line_into_entry(lbl)
+                if e:
+                    entries.append(e)
+
+        # Baue die Rückgabe-Textdarstellung, die an Gemini geschickt wird
+        if entries:
+            lines = []
+            for e in entries:
+                parts = []
+                if e.get('activity'):
+                    parts.append(f"Aktivität: {e['activity']}")
+                if e.get('course'):
+                    parts.append(f"Modul: {e['course']}")
+                if e.get('due_iso'):
+                    parts.append(f"Fällig: {e['due_iso']}")
+                else:
+                    # If no ISO date, include original text to preserve info
+                    parts.append(f"Info: {e['original']}")
+                lines.append(' | '.join(parts))
+            termine_text = "\n".join(lines)
+            return termine_text
+        else:
+            # Keine Termine gefunden -> gib am Ende die kombinierten Texte zurück (wie bisher)
+            if aria_texts:
+                return "\n".join(aria_texts)
+            return visible_text
 
     except Exception as e:
         return f"Fehler beim Scraping: {e}"
@@ -170,7 +369,7 @@ def ask_gemini(termine: str) -> str:
         config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Moodle-Termine für den Benutzer zusammenfasst."),
         contents="Hier sind meine Moodle-Termine:\n" + termine 
             + "Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'. Heute ist der " + datetime.date.today().isoformat() 
-            + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen')."
+            + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
         )
     return response.text
 
