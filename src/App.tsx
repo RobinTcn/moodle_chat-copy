@@ -94,6 +94,7 @@ function App() {
   const [input, setInput] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedTab, setSelectedTab] = useState<"calendar"|"chat"|"settings">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
@@ -120,38 +121,80 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100">
-      <div className="p-4 bg-white border-b flex gap-2">
-        <input type="text" placeholder="Benutzername" className="border rounded-lg p-2 flex-1" value={username} onChange={e=>setUsername(e.target.value)} />
-        <input type="password" placeholder="Passwort" className="border rounded-lg p-2 flex-1" value={password} onChange={e=>setPassword(e.target.value)} />
+      {/* Top header: simple title */}
+      <div className="p-4 bg-white border-b flex items-center justify-center">
+        <h1 className="text-lg font-semibold">Moodle Chat</h1>
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        {messages.map((m,i)=>(
-          <div key={i} className={`flex mb-2 ${m.sender==="user"?"justify-end":"justify-start"}`}>
-            <div className={`rounded-lg p-3 max-w-xs ${m.sender==="user"?"bg-green-500 text-white":"bg-gray-300 text-black"}`}>
-              {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
-              {m.sender === "bot" ? (
-                <div
-                  // We intentionally allow limited HTML from the backend. Convert simple Markdown to HTML first.
-                  dangerouslySetInnerHTML={{ __html: renderMarkup(m.text) }}
+
+      {/* Main content area. We add bottom padding so the bottom nav doesn't overlap content. */}
+      <div className="flex-1 overflow-y-auto p-4 pb-24">
+        {selectedTab === "calendar" && (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-gray-500">Kalender (Platzhalter)</div>
+          </div>
+        )}
+
+        {selectedTab === "chat" && (
+          <div>
+            {messages.map((m,i)=>(
+              <div key={i} className={`flex mb-2 ${m.sender==="user"?"justify-end":"justify-start"}`}>
+                <div className={`rounded-lg p-3 max-w-xs ${m.sender==="user"?"bg-green-500 text-white":"bg-gray-300 text-black"}`}>
+                  {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
+                  {m.sender === "bot" ? (
+                    <div
+                      // We intentionally allow limited HTML from the backend. Convert simple Markdown to HTML first.
+                      dangerouslySetInnerHTML={{ __html: renderMarkup(m.text) }}
+                    />
+                  ) : (
+                    // Render user message as plain text to avoid accidental HTML rendering
+                    <div>{m.text}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+
+            {/* Chat input: fixed to bottom of view but inside content area we keep it at the bottom visually by placing it here. */}
+            <div className="fixed left-0 right-0 bottom-16 flex p-4 bg-white border-t max-w-4xl mx-auto w-full">
+              <div className="mx-auto flex w-full max-w-4xl">
+                <input 
+                  type="text" 
+                  className="flex-1 border rounded-lg p-2 mr-2"
+                  value={input} 
+                  onChange={e=>setInput(e.target.value)} 
+                  onKeyDown={handleKey}
                 />
-              ) : (
-                // Render user message as plain text to avoid accidental HTML rendering
-                <div>{m.text}</div>
-              )}
+                <button onClick={sendMessage} className="bg-green-500 text-white px-4 rounded-lg">Senden</button>
+              </div>
             </div>
           </div>
-        ))}
-        <div ref={messagesEndRef} />
+        )}
+
+        {selectedTab === "settings" && (
+          <div className="max-w-xl mx-auto">
+            <h2 className="text-lg font-medium mb-4">Einstellungen</h2>
+            <label className="block mb-2 text-sm text-gray-700">Benutzername</label>
+            <input type="text" placeholder="Benutzername" className="border rounded-lg p-2 w-full mb-4" value={username} onChange={e=>setUsername(e.target.value)} />
+            <label className="block mb-2 text-sm text-gray-700">Passwort</label>
+            <input type="password" placeholder="Passwort" className="border rounded-lg p-2 w-full mb-4" value={password} onChange={e=>setPassword(e.target.value)} />
+            <div className="text-sm text-gray-500">Die Anmeldedaten werden beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, sie werden nicht gespeichert oder an eine dritte Partei weitergegeben.</div>
+          </div>
+        )}
       </div>
-      <div className="flex p-4 bg-white border-t">
-        <input 
-          type="text" 
-          className="flex-1 border rounded-lg p-2 mr-2"
-          value={input} 
-          onChange={e=>setInput(e.target.value)} 
-          onKeyDown={handleKey}
-        />
-        <button onClick={sendMessage} className="bg-green-500 text-white px-4 rounded-lg">Senden</button>
+
+      {/* Bottom navigation */}
+      <div className="fixed left-0 right-0 bottom-0 bg-white border-t">
+        <div className="max-w-4xl mx-auto flex justify-between">
+          <button onClick={()=>setSelectedTab("calendar")} className={`w-1/3 p-3 text-center ${selectedTab==="calendar"?"text-green-600 font-semibold":"text-gray-600"}`}>
+            Kalender
+          </button>
+          <button onClick={()=>setSelectedTab("chat")} className={`w-1/3 p-3 text-center ${selectedTab==="chat"?"text-green-600 font-semibold":"text-gray-600"}`}>
+            Chat
+          </button>
+          <button onClick={()=>setSelectedTab("settings")} className={`w-1/3 p-3 text-center ${selectedTab==="settings"?"text-green-600 font-semibold":"text-gray-600"}`}>
+            Einstellungen
+          </button>
+        </div>
       </div>
     </div>
   );
