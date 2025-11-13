@@ -267,9 +267,9 @@ def ask_gemini(termine: str) -> str:
     client = genai.Client()
     response = client.models.generate_content(
         model="gemini-2.0-flash", 
-        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Moodle-Termine für den Benutzer zusammenfasst."),
-        contents="Hier sind meine Moodle-Termine:\n" + termine 
-            + "Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'. Heute ist der " + datetime.date.today().isoformat() 
+        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst."),
+        contents="Hier sind meine Moodle-Aufgaben:\n" + termine 
+            + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
             + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
         )
     return response.text
@@ -288,7 +288,7 @@ async def determine_intent(message: str) -> str:
         "Classify the user's message into exactly one of the following intent labels: "
         + ", ".join(labels)
         + ".\nRespond with only the intent label (one of the labels) and nothing else.\n"
-        + "If the user asks about Moodle appointments, deadlines or 'Termine', return 'get_moodle_appointments'.\n"
+        + "If the user asks about Moodle appointments, deadlines or 'Aufgaben', return 'get_moodle_appointments'.\n"
         + "If the user asks about Stine messages or 'Stine Nachrichten', return 'get_stine_messages'.\n"
         + "If the user asks about email or 'E-Mail', return 'get_mail'.\n"
         + "If the message is a greeting (hello, hi, hallo) return 'greeting'.\n"
