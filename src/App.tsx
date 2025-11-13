@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { ChatResponse } from './ChatResponse';
 import BottomNav from './BottomNav';
+import Calendar from './Calendar';
 
 interface Message {
   sender: "user" | "bot";
@@ -176,8 +177,8 @@ function App() {
       {/* Main content area. We add bottom padding so the bottom nav doesn't overlap content. */}
       <div className="flex-1 overflow-y-auto p-4 pb-24">
         {selectedTab === "calendar" && (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-gray-500">Kalender (Platzhalter)</div>
+          <div className="h-full">
+            <Calendar />
           </div>
         )}
 
