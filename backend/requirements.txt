@@ -1,7 +1,11 @@
-fastapi
-uvicorn[standard]
-selenium
+# Backend Python dependencies required by backend.py
+
 beautifulsoup4
-requests
+fastapi
 google-generativeai
+pydantic
 python-dotenv
+requests
+selenium
+uvicorn[standard]
+
