@@ -4,7 +4,17 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+import os
 import re
+
+# Load .env file if present (developer convenience). Requires python-dotenv in requirements.
+try:
+    from dotenv import load_dotenv
+    # load .env from backend directory (where this file lives)
+    load_dotenv()
+except Exception:
+    # If python-dotenv isn't installed, that's okay — environment variables may be set elsewhere.
+    pass
 
 # Note: selenium and bs4 imports are moved into the scraping function so the
 # FastAPI app can start even when Selenium/chromedriver aren't installed.
@@ -143,6 +153,18 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
         except Exception:
             pass
 
+def ask_gemini(termine: str) -> str:
+    """Send a prompt to Gemini and return the response text."""
+    try:
+        from google import genai
+    except ImportError:
+        return "Fehler: 'google' Paket nicht installiert."
+
+    client = genai.Client()
+    response = client.models.generate_content(
+        model="gemini-2.0-flash", contents="Hier sind meine Moodle-Termine:\n" + termine + "\nFasse sie übersichtlich zusammen. Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'.")
+    return response.text
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     msg = request.message.lower()
@@ -151,7 +173,8 @@ async def chat(request: ChatRequest):
             termine = scrape_moodle_text(request.username, request.password)
             # scrape_moodle_text returns a string with either the Termine or an error message
             # Return the Termine (or the error message) directly to the frontend.
-            response = f"Hier sind deine aktuellen Moodle-Termine:\n{termine}"
+            # response = f"Hier sind deine aktuellen Moodle-Termine:\n{termine}"
+            response = ask_gemini(termine)
             return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
