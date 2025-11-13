@@ -22,3 +22,5 @@ In your `\frontend\`command line, run these two commands:
 `npm install`
 
 `npm run dev`
+
+This should produce a link to a localhost page which you can click on.
