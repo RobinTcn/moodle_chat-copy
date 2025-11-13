@@ -258,26 +258,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
         else:
             text = visible_text
 
-        # Vollständigen Text in Datei speichern (Verzeichnis kann über SCRAPE_SAVE_DIR gesetzt werden)
-        try:
-            save_dir = os.getenv("logs") or os.path.join(os.path.dirname(__file__), "scraped_pages")
-            os.makedirs(save_dir, exist_ok=True)
-            fname = "moodle_page_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
-            save_path = os.path.join(save_dir, fname)
-            with open(save_path, "w", encoding="utf-8", errors="replace") as f:
-                f.write(text)
-            logging.info("Seiten-Text gespeichert: %s", save_path)
-            # Zusätzlich Debug-HTML speichern (hilft beim Analysieren von Fehlschlägen)
-            try:
-                html_path = os.path.splitext(save_path)[0] + ".html"
-                with open(html_path, "w", encoding="utf-8", errors="replace") as hf:
-                    hf.write(driver.page_source)
-                logging.info("Seiten-HTML gespeichert: %s", html_path)
-            except Exception as e:
-                logging.warning("Konnte HTML nicht speichern: %s", e)
-        except Exception as e:
-            logging.warning("Konnte Seite nicht speichern: %s", e)
-
         # Versuche, den Abschnitt zwischen 'Aktuelle Termine' und 'Zum Kalender' zu extrahieren
         match = re.search(r"(?<=Aktuelle Termine)(.*?)(?=Zum Kalender)", text, re.DOTALL)
         if match:
