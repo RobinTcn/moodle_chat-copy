@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 import os
 import re
+import logging
+import asyncio
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -165,22 +167,98 @@ def ask_gemini(termine: str) -> str:
         model="gemini-2.0-flash", contents="Hier sind meine Moodle-Termine:\n" + termine + "\nFasse sie übersichtlich zusammen. Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'.")
     return response.text
 
+
+async def determine_intent(message: str) -> str:
+    """Asynchronously determine the user's intent by asking Gemini.
+
+    Returns one of: 'get_appointments', 'greeting', 'help', 'unknown'.
+    Retries on transient errors to be more robust when many requests arrive quickly.
+    """
+    msg = message.strip()
+    labels = ["get_moodle_appointments", "get_stine_messages", "get_mail", "greeting", "help", "unknown"]
+
+    prompt = (
+        "Classify the user's message into exactly one of the following intent labels: "
+        + ", ".join(labels)
+        + ".\nRespond with only the intent label (one of the labels) and nothing else.\n"
+        + "If the user asks about Moodle appointments, deadlines or 'Termine', return 'get_moodle_appointments'.\n"
+        + "If the user asks about Stine messages or 'Stine Nachrichten', return 'get_stine_messages'.\n"
+        + "If the user asks about email or 'E-Mail', return 'get_mail'.\n"
+        + "If the message is a greeting (hello, hi, hallo) return 'greeting'.\n"
+        + "If the user asks for help or how to use the bot return 'help'.\n"
+        + f"User message: \"{msg}\"\n"
+    )
+
+    # Blocking call will run in a thread to avoid blocking the event loop.
+    def _call_genai(inner_prompt: str):
+        try:
+            from google import genai
+        except Exception:
+            raise
+        client = genai.Client()
+        return client.models.generate_content(model="gemini-2.0-flash", contents=inner_prompt)
+
+    max_retries = 3
+    backoff_base = 0.5
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = await asyncio.to_thread(_call_genai, prompt)
+            # parse the model response robustly
+            intent_text = ""
+            if hasattr(response, 'text') and response.text:
+                intent_text = response.text.strip().splitlines()[0].strip()
+            if intent_text in labels:
+                return intent_text
+            for lab in labels:
+                if lab in getattr(response, 'text', ''):
+                    return lab
+            logging.info("Gemini returned unexpected intent text (attempt %d): %s", attempt, getattr(response, 'text', response))
+            # If model returned something unexpected, retry a couple times
+        except Exception as e:
+            logging.warning("Attempt %d: Error calling Gemini for intent detection: %s", attempt, e)
+
+        # backoff before retrying
+        if attempt < max_retries:
+            await asyncio.sleep(backoff_base * (2 ** (attempt - 1)))
+
+    # All retries failed or response couldn't be parsed -> fallback
+    logging.error("Intent detection failed after %d attempts for message: %s", max_retries, msg)
+    return "unknown"
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    msg = request.message.lower()
-    if "termin" in msg:
+    # Use Gemini to classify the user's intent. If Gemini fails, determine_intent
+    # will return 'unknown' and we fall back to a simple keyword check.
+    intent = await determine_intent(request.message)
+    # Route based on detected intent
+    if intent == "get_moodle_appointments":
         try:
             termine = scrape_moodle_text(request.username, request.password)
-            # scrape_moodle_text returns a string with either the Termine or an error message
-            # Return the Termine (or the error message) directly to the frontend.
-            # response = f"Hier sind deine aktuellen Moodle-Termine:\n{termine}"
             response = ask_gemini(termine)
             return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
+            return {"response": response}
+    elif intent == "get_stine_messages":
+        return {"response": "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."}
+    elif intent == "get_mail":
+        return {"response": "Die Funktion zum Abrufen von E-Mails ist noch nicht implementiert."}
+    elif intent == "greeting":
+        return {"response": "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"}
+    elif intent == "help":
+        return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
     else:
-        response = "Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen."
-    return {"response": response}
+        # As a safety net, also accept the old keyword check (keeps behaviour if Gemini fails)
+        msg = request.message.lower()
+        if "termin" in msg:
+            try:
+                termine = scrape_moodle_text(request.username, request.password)
+                response = ask_gemini(termine)
+                return {"response": response}
+            except Exception as e:
+                response = f"Fehler beim Abrufen: {e}"
+                return {"response": response}
+        return {"response": "Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen."}
 
 
 @app.get("/health")
