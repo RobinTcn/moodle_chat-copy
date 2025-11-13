@@ -278,7 +278,6 @@ def ask_gemini(termine: str) -> str:
 async def determine_intent(message: str) -> str:
     """Asynchronously determine the user's intent by asking Gemini.
 
-    Returns one of: 'get_appointments', 'greeting', 'help', 'unknown'.
     Retries on transient errors to be more robust when many requests arrive quickly.
     """
     msg = message.strip()
