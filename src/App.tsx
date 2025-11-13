@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { ChatResponse } from './ChatResponse';
+import BottomNav from './BottomNav';
 
 interface Message {
   sender: "user" | "bot";
@@ -97,23 +98,69 @@ function App() {
   const [selectedTab, setSelectedTab] = useState<"calendar"|"chat"|"settings">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Load saved credentials from localStorage on first render
+  useEffect(() => {
+    try {
+      const su = localStorage.getItem('moodle_username');
+      const sp = localStorage.getItem('moodle_password');
+      if (su) setUsername(su);
+      if (sp) setPassword(sp);
+    } catch (e) {
+      // ignore (e.g. localStorage not available)
+    }
+  }, []);
+
+  // Persist credentials to localStorage whenever they change
+  useEffect(() => {
+    try {
+      if (username) localStorage.setItem('moodle_username', username);
+      else localStorage.removeItem('moodle_username');
+      if (password) localStorage.setItem('moodle_password', password);
+      else localStorage.removeItem('moodle_password');
+    } catch (e) {
+      // ignore
+    }
+  }, [username, password]);
+
+  const clearCredentials = () => {
+    setUsername("");
+    setPassword("");
+    try {
+      localStorage.removeItem('moodle_username');
+      localStorage.removeItem('moodle_password');
+    } catch (e) {}
+  };
+
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(scrollToBottom, [messages]);
 
   const sendMessage = async () => {
     if (!input.trim()) return;
-    setMessages([...messages, { sender: "user", text: input }]);
     const userMessage = input;
     setInput("");
+
+    // typing indicator HTML (will be rendered as HTML by the bot bubble)
+    const typingHtml = '<div class="typing-bubble"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>';
+
+    // Add user message and typing indicator atomically
+    setMessages(prev => [...prev, { sender: "user", text: userMessage }, { sender: "bot", text: typingHtml }]);
+
     try {
-      const res = await axios.post<ChatResponse>("http://127.0.0.1:8000/chat", { 
-        message: userMessage, 
-        username, 
-        password 
+      const res = await axios.post<ChatResponse>("http://127.0.0.1:8000/chat", {
+        message: userMessage,
+        username,
+        password
       });
-      setMessages(prev => [...prev, { sender: "bot", text: res.data.response }]);
+      // Replace the typing indicator (last message) with the real response
+      setMessages(prev => {
+        const withoutTyping = prev.slice(0, -1); // drop last (typing)
+        return [...withoutTyping, { sender: "bot", text: res.data.response }];
+      });
     } catch {
-      setMessages(prev => [...prev, { sender: "bot", text: "Fehler beim Server." }]);
+      setMessages(prev => {
+        const withoutTyping = prev.slice(0, -1);
+        return [...withoutTyping, { sender: "bot", text: "Fehler beim Server." }];
+      });
     }
   };
 
@@ -123,7 +170,7 @@ function App() {
     <div className="flex flex-col h-screen bg-gray-100">
       {/* Top header: simple title */}
       <div className="p-4 bg-white border-b flex items-center justify-center">
-        <h1 className="text-lg font-semibold">Moodle Chat</h1>
+        <h1 className="text-lg font-semibold">StudiBot</h1>
       </div>
 
       {/* Main content area. We add bottom padding so the bottom nav doesn't overlap content. */}
@@ -154,17 +201,18 @@ function App() {
             ))}
             <div ref={messagesEndRef} />
 
-            {/* Chat input: fixed to bottom of view but inside content area we keep it at the bottom visually by placing it here. */}
-            <div className="fixed left-0 right-0 bottom-16 flex p-4 bg-white border-t max-w-4xl mx-auto w-full">
-              <div className="mx-auto flex w-full max-w-4xl">
+            {/* Chat input: lifted above the bottom nav, rounded container and pill-shaped controls */}
+            <div className="fixed left-0 right-0 bottom-24 flex p-4 max-w-4xl mx-auto w-full z-20">
+              <div className="mx-auto flex w-full max-w-4xl bg-white rounded-xl shadow-lg ring-1 ring-gray-200 px-2 py-2 items-center gap-2">
                 <input 
                   type="text" 
-                  className="flex-1 border rounded-lg p-2 mr-2"
+                  className="flex-1 border-0 outline-none px-4 py-2 rounded-full"
                   value={input} 
                   onChange={e=>setInput(e.target.value)} 
                   onKeyDown={handleKey}
+                  placeholder="Schreibe eine Nachricht..."
                 />
-                <button onClick={sendMessage} className="bg-green-500 text-white px-4 rounded-lg">Senden</button>
+                <button onClick={sendMessage} className="bg-green-500 hover:bg-green-600 text-white px-5 py-2 rounded-full shadow">Senden</button>
               </div>
             </div>
           </div>
@@ -177,25 +225,16 @@ function App() {
             <input type="text" placeholder="Benutzername" className="border rounded-lg p-2 w-full mb-4" value={username} onChange={e=>setUsername(e.target.value)} />
             <label className="block mb-2 text-sm text-gray-700">Passwort</label>
             <input type="password" placeholder="Passwort" className="border rounded-lg p-2 w-full mb-4" value={password} onChange={e=>setPassword(e.target.value)} />
-            <div className="text-sm text-gray-500">Die Anmeldedaten werden beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, sie werden nicht gespeichert oder an eine dritte Partei weitergegeben.</div>
+            <div className="text-sm text-gray-500">Die Anmeldedaten werden lokal gespeichert und beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, an eine dritte Partei weitergegeben.</div>
+            <div className="mt-4">
+              <button onClick={clearCredentials} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">Anmeldedaten löschen</button>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Bottom navigation */}
-      <div className="fixed left-0 right-0 bottom-0 bg-white border-t">
-        <div className="max-w-4xl mx-auto flex justify-between">
-          <button onClick={()=>setSelectedTab("calendar")} className={`w-1/3 p-3 text-center ${selectedTab==="calendar"?"text-green-600 font-semibold":"text-gray-600"}`}>
-            Kalender
-          </button>
-          <button onClick={()=>setSelectedTab("chat")} className={`w-1/3 p-3 text-center ${selectedTab==="chat"?"text-green-600 font-semibold":"text-gray-600"}`}>
-            Chat
-          </button>
-          <button onClick={()=>setSelectedTab("settings")} className={`w-1/3 p-3 text-center ${selectedTab==="settings"?"text-green-600 font-semibold":"text-gray-600"}`}>
-            Einstellungen
-          </button>
-        </div>
-      </div>
+      {/* Bottom navigation (extracted) */}
+      <BottomNav selectedTab={selectedTab} onSelect={setSelectedTab} />
     </div>
   );
 }
