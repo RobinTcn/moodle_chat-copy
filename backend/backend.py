@@ -8,6 +8,7 @@ import os
 import re
 import logging
 import asyncio
+import datetime
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -159,12 +160,18 @@ def ask_gemini(termine: str) -> str:
     """Send a prompt to Gemini and return the response text."""
     try:
         from google import genai
+        from google.genai import types
     except ImportError:
         return "Fehler: 'google' Paket nicht installiert."
 
     client = genai.Client()
     response = client.models.generate_content(
-        model="gemini-2.0-flash", contents="Hier sind meine Moodle-Termine:\n" + termine + "\nFasse sie übersichtlich zusammen. Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'.")
+        model="gemini-2.0-flash", 
+        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Moodle-Termine für den Benutzer zusammenfasst."),
+        contents="Hier sind meine Moodle-Termine:\n" + termine 
+            + "Beginne die Nachricht mit 'Hier sind deine Moodle-Termine:'. Heute ist der " + datetime.date.today().isoformat() 
+            + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen')."
+        )
     return response.text
 
 
