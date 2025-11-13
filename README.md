@@ -5,7 +5,10 @@ Create a `.env` file in `\backend\` containing `GEMINI_API_KEY=` followed by you
 
 
 ## 2 Start the App
-First, open up two powershell command lines. In one, open `\backend\`, in the other open `\frontend\`.
+Firstly, navigate to this project in a powershell terminal and run `pip install -r backend/requirements.txt`. 
+This will install all needed packages. 
+
+Secondly, open up two powershell terminals. In one, open `\backend\`, in the other open `\frontend\`.
 ### Start backend:
 In your `\backend\`command line, run these two commands:
 
