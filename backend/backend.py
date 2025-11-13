@@ -9,6 +9,7 @@ import re
 import logging
 import asyncio
 import datetime
+import time
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -131,6 +132,22 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
         # Warte auf Aktuelle Termine
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Aktuelle Termine')]") ))
 
+        # Ensure the page is fully loaded before capturing the HTML.
+        # 1) wait for document.readyState == 'complete'
+        # 2) if jQuery is present, wait until there are no active ajax requests
+        try:
+            wait.until(lambda d: d.execute_script("return document.readyState") == 'complete')
+            # give a tiny buffer for any final async rendering
+            time.sleep(0.25)
+            try:
+                wait.until(lambda d: d.execute_script("return (typeof jQuery !== 'undefined') ? (jQuery.active === 0) : true"))
+            except Exception:
+                # jQuery check is optional; ignore if it times out or jQuery not present
+                pass
+        except Exception:
+            # If waiting for readyState times out, continue anyway but log for debugging
+            logging.info("Wartezeit für vollständiges Laden der Seite überschritten, fahre mit Erfassen fort.")
+
         html = driver.page_source
 
         # Verwende Selenium, um aria-labels direkt aus dem DOM zu lesen. Das ist
@@ -185,6 +202,49 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
                         aria_texts.append(lbl)
             else:
                 aria_texts = section_aria
+            # Wenn noch keine aria_texts, versuche breitere DOM-Suche nach typischen Deadline-Elementen
+            if not aria_texts:
+                try:
+                    candidate_selectors = "[data-due], .duedate, .due, .calendar-event, .event, .activityinstance, .submission, .submissionduedate, .instancename, .coursename"
+                    if 'container' in locals() and container:
+                        candidates = container.find_elements(By.CSS_SELECTOR, candidate_selectors)
+                    else:
+                        candidates = driver.find_elements(By.CSS_SELECTOR, candidate_selectors)
+                    for c in candidates:
+                        try:
+                            parts = []
+                            lbl = c.get_attribute('aria-label')
+                            if lbl:
+                                parts.append(lbl)
+                            title = c.get_attribute('title')
+                            if title:
+                                parts.append(title)
+                            txt = c.text
+                            if txt:
+                                parts.append(txt)
+                            # versuche Kursname aus einem ancestor oder Link zu ziehen
+                            course_name = None
+                            try:
+                                anc = c.find_element(By.XPATH, "ancestor::*[contains(@class,'course') or contains(@class,'coursename') or contains(@class,'instancename')][1]")
+                                if anc and anc.text:
+                                    course_name = anc.text
+                            except Exception:
+                                pass
+                            try:
+                                a = c.find_element(By.XPATH, ".//a")
+                                if a and a.text:
+                                    course_name = course_name or a.text
+                            except Exception:
+                                pass
+                            combined = " | ".join([p for p in parts if p])
+                            if course_name:
+                                combined = combined + " — " + course_name
+                            if combined and ('fällig' in combined.lower() or date_pattern.search(combined)):
+                                aria_texts.append(combined)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception as e:
             logging.warning("Fehler beim Sammeln von aria-labels via Selenium: %s", e)
 
@@ -207,6 +267,14 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             with open(save_path, "w", encoding="utf-8", errors="replace") as f:
                 f.write(text)
             logging.info("Seiten-Text gespeichert: %s", save_path)
+            # Zusätzlich Debug-HTML speichern (hilft beim Analysieren von Fehlschlägen)
+            try:
+                html_path = os.path.splitext(save_path)[0] + ".html"
+                with open(html_path, "w", encoding="utf-8", errors="replace") as hf:
+                    hf.write(driver.page_source)
+                logging.info("Seiten-HTML gespeichert: %s", html_path)
+            except Exception as e:
+                logging.warning("Konnte HTML nicht speichern: %s", e)
         except Exception as e:
             logging.warning("Konnte Seite nicht speichern: %s", e)
 
@@ -231,26 +299,60 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
         }
 
         def parse_date_from_text(s: str):
-            # Suche nach Mustern wie '16. November 2025' und optionaler Uhrzeit '23:59'
-            m = re.search(r"(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})(?:[,\s]+(\d{1,2}:\d{2}))?", s)
-            if not m:
-                return None
-            day = int(m.group(1))
-            month_name = m.group(2).lower()
-            year = int(m.group(3))
-            time_part = m.group(4)
-            month = month_map.get(month_name)
-            if not month:
-                return None
+            # Versuch 1: dateparser (flexibel, unterstützt relative Begriffe, fehlende Jahre etc.)
             try:
-                if time_part:
-                    hh, mm = map(int, time_part.split(':'))
-                    dt = datetime.datetime(year, month, day, hh, mm)
-                else:
-                    dt = datetime.datetime(year, month, day)
-                return dt.isoformat(sep=' ')
+                import dateparser
+                dt = dateparser.parse(s, languages=['de'], settings={'PREFER_DATES_FROM': 'future'})
+                if dt:
+                    return dt.isoformat(sep=' ')
             except Exception:
-                return None
+                # dateparser fehlt oder scheitert -> fallback auf Regex
+                pass
+
+            # Fallback: Suche nach Mustern wie '16. November 2025' und optionaler Uhrzeit '23:59'
+            m = re.search(r"(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})(?:[,\s]+(\d{1,2}:\d{2}))?", s)
+            if m:
+                day = int(m.group(1))
+                month_name = m.group(2).lower()
+                year = int(m.group(3))
+                time_part = m.group(4)
+                month = month_map.get(month_name)
+                if not month:
+                    return None
+                try:
+                    if time_part:
+                        hh, mm = map(int, time_part.split(':'))
+                        dt = datetime.datetime(year, month, day, hh, mm)
+                    else:
+                        dt = datetime.datetime(year, month, day)
+                    return dt.isoformat(sep=' ')
+                except Exception:
+                    return None
+
+            # Letzter Versuch: Muster ohne Jahr (z.B. '16. November') -> aktuelles Jahr verwenden
+            m2 = re.search(r"(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)(?:[,\s]+(\d{1,2}:\d{2}))?", s)
+            if m2:
+                day = int(m2.group(1))
+                month_name = m2.group(2).lower()
+                time_part = m2.group(3)
+                month = month_map.get(month_name)
+                if not month:
+                    return None
+                year = datetime.date.today().year
+                try:
+                    if time_part:
+                        hh, mm = map(int, time_part.split(':'))
+                        dt = datetime.datetime(year, month, day, hh, mm)
+                    else:
+                        dt = datetime.datetime(year, month, day)
+                    # Falls Datum in der Vergangenheit liegt, nehme nächstes Jahr
+                    if dt.date() < datetime.date.today():
+                        dt = dt.replace(year=year+1)
+                    return dt.isoformat(sep=' ')
+                except Exception:
+                    return None
+
+            return None
 
         def parse_line_into_entry(line: str):
             # Entferne überflüssige Whitespace
@@ -262,7 +364,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             date_iso = parse_date_from_text(s)
 
             # Versuche, Aktivität und Kurs/Modul zu ermitteln
-            # Many labels use ' in <Kurs>' or ' - <Aktivität> in <Kurs>' or similar
             activity = ''
             course = ''
 
@@ -279,11 +380,12 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
 
             left = s if split_point is None else s[:split_point].strip()
 
-            # If left contains ' in ', take last ' in ' as separator between activity and course
-            if ' in ' in left:
-                parts = left.rsplit(' in ', 1)
-                activity = parts[0].strip(" -:\t")
-                course = parts[1].strip(" -:\t")
+            # Suche nach gängigen Trennwörtern (in, im, für, vom, von, aus)
+            sep = re.search(r"\b(in|im|für|vom|von|aus)\b", left, re.I)
+            if sep:
+                # activity = text before separator; course = text after
+                activity = left[:sep.start()].strip(" -:\t")
+                course = left[sep.end():].strip(" -:\t")
             else:
                 # Try other separators like ' - '
                 if ' - ' in left:
