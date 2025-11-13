@@ -176,8 +176,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             if not s:
                 return None
 
-            # Versuche Datum zu extrahieren
-            date_iso = parse_date_from_text(s)
 
             # Versuche, Aktivität und Kurs/Modul zu ermitteln
             activity = ''
@@ -188,11 +186,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             m_ist = re.search(r"\bist\b|\bist\s+am\b|\bfällig\b", s, re.I)
             if m_ist:
                 split_point = m_ist.start()
-            elif date_iso:
-                # find where the date text starts and cut there
-                dm = re.search(r"(\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4})", s)
-                if dm:
-                    split_point = dm.start()
 
             left = s if split_point is None else s[:split_point].strip()
 
@@ -217,7 +210,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             return {
                 'activity': activity or None,
                 'course': course or None,
-                'due_iso': date_iso,
                 'original': s
             }
 
@@ -235,7 +227,6 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
                     entries.append(e)
 
         
-
         # Baue die Rückgabe-Textdarstellung, die an Gemini geschickt wird
         if entries:
             lines = []
