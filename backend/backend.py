@@ -10,6 +10,7 @@ import logging
 import asyncio
 import datetime
 import time
+import threading
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -33,6 +34,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# Simple in-memory conversation state to track when the bot asked the calendar question.
+# Keyed by username -> { 'awaiting_calendar': bool, 'ts': float }
+conversation_state = {}
+state_lock = threading.Lock()
+STATE_EXPIRY_SECONDS = 120  # consent expires after 2 minutes
 
 class ChatRequest(BaseModel):
     message: str
@@ -271,8 +278,9 @@ def ask_gemini(termine: str) -> str:
         contents="Hier sind meine Moodle-Aufgaben:\n" + termine 
             + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
             + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
+            " Unterscheide zwischen endenden und beginnenden Terminen."
         )
-    return response.text
+    return response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
 
 
 async def determine_intent(message: str) -> str:
@@ -281,7 +289,17 @@ async def determine_intent(message: str) -> str:
     Retries on transient errors to be more robust when many requests arrive quickly.
     """
     msg = message.strip()
-    labels = ["get_moodle_appointments", "get_stine_messages", "get_mail", "greeting", "help", "unknown"]
+    # Add calendar_yes/calendar_no so short replies like 'Ja'/'Nein' are classified
+    labels = [
+        "get_moodle_appointments",
+        "get_stine_messages",
+        "get_mail",
+        "greeting",
+        "help",
+        "calendar_yes",
+        "calendar_no",
+        "unknown",
+    ]
 
     prompt = (
         "Classify the user's message into exactly one of the following intent labels: "
@@ -290,8 +308,10 @@ async def determine_intent(message: str) -> str:
         + "If the user asks about Moodle appointments, deadlines or 'Aufgaben', return 'get_moodle_appointments'.\n"
         + "If the user asks about Stine messages or 'Stine Nachrichten', return 'get_stine_messages'.\n"
         + "If the user asks about email or 'E-Mail', return 'get_mail'.\n"
-        + "If the message is a greeting (hello, hi, hallo) return 'greeting'.\n"
-        + "If the user asks for help or how to use the bot return 'help'.\n"
+    + "If the message is a greeting (hello, hi, hallo) return 'greeting'.\n"
+    + "If the user asks for help or how to use the bot return 'help'.\n"
+    + "If the user replies with an affirmative like 'ja' (German) or 'yes', return 'calendar_yes'.\n"
+    + "If the user replies with a negative like 'nein' (German) or 'no', return 'calendar_no'.\n"
         + f"User message: \"{msg}\"\n"
     )
 
@@ -335,12 +355,50 @@ async def determine_intent(message: str) -> str:
 async def chat(request: ChatRequest):
     # Use Gemini to classify the user's intent. If Gemini fails, determine_intent
     # will return 'unknown' and we fall back to a simple keyword check.
-    intent = await determine_intent(request.message)
+    username = request.username
+
+    # Check and expire any old conversation state for this user
+    with state_lock:
+        state = conversation_state.get(username)
+        if state:
+            if time.time() - state.get('ts', 0) > STATE_EXPIRY_SECONDS:
+                # expired
+                del conversation_state[username]
+                state = None
+
+    # If the bot previously asked about adding to calendar, interpret simple yes/no locally
+    intent = None
+    if state and state.get('awaiting_calendar'):
+        # Interpret a short affirmative/negative reply without calling Gemini
+        msg_low = request.message.strip().lower()
+        if msg_low in ("ja", "j", "yes", "y", "klar", "gerne"):
+            intent = "calendar_yes"
+        elif msg_low in ("nein", "n", "no"):
+            intent = "calendar_no"
+        # If message isn't a clear yes/no, fall back to full intent detection (below)
+
+    if intent is None:
+        intent = await determine_intent(request.message)
+    else:
+        # If we already set intent based on local short-reply parsing, keep it.
+        pass
+
+    # Safety: if Gemini returned calendar_yes/calendar_no but we did not previously ask the
+    # calendar question for this user, ignore those labels to avoid accidental triggers.
+    if intent in ("calendar_yes", "calendar_no"):
+        if not (state and state.get('awaiting_calendar')):
+            # Treat as unknown so normal routing/keyword checks apply.
+            intent = "unknown"
     # Route based on detected intent
     if intent == "get_moodle_appointments":
         try:
             termine = scrape_moodle_text(request.username, request.password)
             response = ask_gemini(termine)
+            # If Gemini asked whether to add events to calendar, mark state so the next short reply
+            # can be interpreted as consent/denial. We only set this for the requesting user.
+            if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
+                with state_lock:
+                    conversation_state[username] = { 'awaiting_calendar': True, 'ts': time.time() }
             return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
@@ -353,6 +411,23 @@ async def chat(request: ChatRequest):
         return {"response": "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"}
     elif intent == "help":
         return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
+    elif intent == "calendar_yes":
+        # User agreed to add appointments to their calendar. We don't implement calendar integration here,
+        # so give a helpful, honest reply and next steps the user can take.
+        # clear awaiting flag for this user
+        with state_lock:
+            if username in conversation_state:
+                del conversation_state[username]
+        return {"response": (
+            "Alles klar — ich würde die Termine jetzt in deinen Kalender eintragen. "
+            "Hinweis: Die eigentliche Kalenderintegration ist derzeit noch nicht implementiert. "
+        )}
+    elif intent == "calendar_no":
+        # clear awaiting flag for this user
+        with state_lock:
+            if username in conversation_state:
+                del conversation_state[username]
+        return {"response": "Alles klar. Mit was kann ich dir sonst helfen?"}
     else:
         # As a safety net, also accept the old keyword check (keeps behaviour if Gemini fails)
         msg = request.message.lower()
