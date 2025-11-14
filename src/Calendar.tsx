@@ -52,6 +52,10 @@ export default function Calendar() {
 	const [events, setEvents] = useState<CalendarEvent[]>(() => loadEvents());
 	const [openDay, setOpenDay] = useState<string | null>(null);
 
+	// add-event modal state (replaces window.prompt)
+	const [addModalDay, setAddModalDay] = useState<string | null>(null);
+	const [addModalText, setAddModalText] = useState<string>("");
+
 	// expose global helper so other parts of the app (e.g. chatbot handlers) can add events
 	useEffect(() => {
 		// define a function on window
@@ -106,8 +110,8 @@ export default function Calendar() {
 	const nextMonth = () => setCurrent(c => new Date(c.getFullYear(), c.getMonth() + 1, 1));
 
 	const openAddPrompt = (d: string) => {
-		const text = window.prompt('Neuen Eintrag hinzufügen für ' + d + ':');
-		if (text && text.trim()) addEvent(d, text.trim());
+		setAddModalDay(d);
+		setAddModalText("");
 	};
 
 	// render day cells (start with Mon..Sun header)
@@ -124,7 +128,8 @@ export default function Calendar() {
 	}
 
 		return (
-			<div className="max-w-4xl mx-auto">
+			<>
+			<div className="max-w-4xl mx-auto h-full flex flex-col">
 				<div className="flex items-center justify-between mb-4">
 					<div className="relative w-full flex items-center justify-center">
 						<div className="absolute left-0">
@@ -143,49 +148,51 @@ export default function Calendar() {
 							</button>
 						</div>
 					</div>
-					<div className="text-sm text-gray-500">Klicke auf ein Datum, um Einträge zu sehen. + zum Hinzufügen.</div>
 				</div>
 
-				<div className="grid grid-cols-7 gap-1 text-center">
-					{dayNames.map(dn => (
-						<div key={dn} className="text-sm font-semibold text-gray-600">{dn}</div>
-					))}
+					<div className="grid grid-cols-7 gap-1 text-center">
+						{dayNames.map(dn => (
+							<div key={dn} className="text-sm font-semibold text-gray-600">{dn}</div>
+						))}
+					</div>
 
-					{cells.map((c, idx) => {
-						if (!c) return <div key={idx} className="min-h-[72px] p-1 border border-transparent" />;
-						const evs = eventsByDate[c.iso] || [];
-						return (
-							<div
-								key={c.iso}
-								onClick={() => setOpenDay(c.iso)}
-								className="min-h-[88px] p-2 border rounded-lg bg-white flex flex-col justify-between cursor-pointer"
-							>
-								<div className="flex items-start justify-between">
-									<div className="text-sm font-medium">{c.day}</div>
-									<div className="flex items-center gap-1">
-										<button
-											title="Hinzufügen"
-											onClick={(e) => { e.stopPropagation(); openAddPrompt(c.iso); }}
-											className="text-green-600 px-1 py-0.5 rounded hover:bg-green-50"
-										>
-											+
-										</button>
+					{/* day cells: stretch to fill remaining vertical space */}
+					<div className="grid grid-cols-7 auto-rows-fr gap-1 text-center flex-1">
+						{cells.map((c, idx) => {
+							if (!c) return <div key={idx} className="h-full p-1 border border-transparent" />;
+							const evs = eventsByDate[c.iso] || [];
+							return (
+								<div
+									key={c.iso}
+									onClick={() => setOpenDay(c.iso)}
+									className="h-full p-2 border rounded-lg bg-white flex flex-col justify-between cursor-pointer"
+								>
+									<div className="flex items-start justify-between">
+										<div className="text-sm font-medium">{c.day}</div>
+										<div className="flex items-center gap-1">
+											<button
+												title="Hinzufügen"
+												onClick={(e) => { e.stopPropagation(); openAddPrompt(c.iso); }}
+												className="text-green-600 px-1 py-0.5 rounded hover:bg-green-50"
+											>
+												+
+											</button>
+										</div>
+									</div>
+
+									<div className="mt-2 text-xs text-left space-y-1">
+										{evs.slice(0, 3).map(e => (
+											<div key={e.id} className="flex items-center justify-between gap-2">
+												<div className="truncate">• {e.text}</div>
+												<button title="Entfernen" onClick={(ev) => { ev.stopPropagation(); removeEvent(e.id); }} className="text-red-500 ml-2">✕</button>
+											</div>
+										))}
+										{evs.length > 3 && <div className="text-gray-400 text-xs">+{evs.length - 3} mehr</div>}
 									</div>
 								</div>
-
-								<div className="mt-2 text-xs text-left space-y-1">
-									{evs.slice(0, 3).map(e => (
-										<div key={e.id} className="flex items-center justify-between gap-2">
-											<div className="truncate">• {e.text}</div>
-											<button title="Entfernen" onClick={(ev) => { ev.stopPropagation(); removeEvent(e.id); }} className="text-red-500 ml-2">✕</button>
-										</div>
-									))}
-									{evs.length > 3 && <div className="text-gray-400 text-xs">+{evs.length - 3} mehr</div>}
-								</div>
-							</div>
-						);
-					})}
-				</div>
+							);
+						})}
+					</div>
 
 				{/* simple modal / drawer for day details */}
 				{openDay && (
@@ -207,12 +214,49 @@ export default function Calendar() {
 								{(eventsByDate[openDay] || []).length === 0 && <div className="text-gray-500">Keine Einträge.</div>}
 							</div>
 							<div className="mt-3 flex gap-2">
-								<button onClick={() => { const t = window.prompt('Neuen Eintrag:'); if (t) addEvent(openDay, t); }} className="bg-green-500 text-white px-3 py-1 rounded">Neuen Eintrag</button>
+								<button onClick={() => { if (openDay) { setAddModalDay(openDay); setAddModalText(""); } }} className="bg-green-500 text-white px-3 py-1 rounded">Neuen Eintrag</button>
 								<button onClick={() => setOpenDay(null)} className="px-3 py-1 rounded border">Fertig</button>
 							</div>
 						</div>
 					</div>
 				)}
 			</div>
+
+			{/* Add-event modal (inline) */}
+			{addModalDay && (
+				<div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+					<div className="bg-white rounded-lg max-w-md w-full p-4">
+						<div className="flex items-center justify-between mb-2">
+							<div className="font-medium">Neuen Eintrag für {formatIsoToDisplay(addModalDay as string)}</div>
+							<button onClick={() => setAddModalDay(null)} className="text-gray-500">Abbrechen</button>
+						</div>
+						<div>
+							<textarea
+								value={addModalText}
+								onChange={(e) => setAddModalText(e.target.value)}
+								rows={4}
+								className="w-full border rounded p-2"
+								placeholder="Beschreibung eingeben..."
+							/>
+						</div>
+						<div className="mt-3 flex justify-end gap-2">
+							<button onClick={() => setAddModalDay(null)} className="px-3 py-1 rounded border">Abbrechen</button>
+							<button
+								onClick={() => {
+								if (addModalDay && addModalText.trim()) {
+									addEvent(addModalDay, addModalText.trim());
+								}
+								setAddModalDay(null);
+								setAddModalText("");
+							}}
+							className="bg-green-500 text-white px-3 py-1 rounded"
+							>
+								Speichern
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			</>
 		);
 	}

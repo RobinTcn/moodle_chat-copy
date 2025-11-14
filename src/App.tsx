@@ -226,7 +226,7 @@ function App() {
             <input type="text" placeholder="Benutzername" className="border rounded-lg p-2 w-full mb-4" value={username} onChange={e=>setUsername(e.target.value)} />
             <label className="block mb-2 text-sm text-gray-700">Passwort</label>
             <input type="password" placeholder="Passwort" className="border rounded-lg p-2 w-full mb-4" value={password} onChange={e=>setPassword(e.target.value)} />
-            <div className="text-sm text-gray-500">Die Anmeldedaten werden lokal gespeichert und beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, an eine dritte Partei weitergegeben.</div>
+            <div className="text-sm text-gray-500">Die Anmeldedaten werden lokal gespeichert und beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, sie werden an keine dritte Partei weitergegeben.</div>
             <div className="mt-4">
               <button onClick={clearCredentials} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">Anmeldedaten löschen</button>
             </div>
