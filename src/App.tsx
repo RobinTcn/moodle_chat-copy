@@ -147,7 +147,8 @@ function App() {
     setMessages(prev => [...prev, { sender: "user", text: userMessage }, { sender: "bot", text: typingHtml }]);
 
     try {
-      const res = await axios.post<ChatResponse>("http://127.0.0.1:8000/chat", {
+      const backendBase = "http://127.0.0.1:8000";
+      const res = await axios.post<ChatResponse>(`${backendBase}/chat`, {
         message: userMessage,
         username,
         password
@@ -157,6 +158,13 @@ function App() {
         const withoutTyping = prev.slice(0, -1); // drop last (typing)
         return [...withoutTyping, { sender: "bot", text: res.data.response }];
       });
+
+      // If the backend returned an ICS filename, append a download button message
+      if (res.data && res.data.ics_filename) {
+        const url = `${backendBase}/download_ics/${encodeURIComponent(res.data.ics_filename)}`;
+        const btnHtml = `<div style="margin-top:6px"><a href="${url}" download class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">Kalender herunterladen (.ics)</a></div>`;
+        setMessages(prev => [...prev, { sender: "bot", text: btnHtml }]);
+      }
     } catch {
       setMessages(prev => {
         const withoutTyping = prev.slice(0, -1);

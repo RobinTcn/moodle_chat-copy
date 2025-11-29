@@ -1,6 +1,6 @@
 # backend.py
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, FileResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -25,6 +25,7 @@ except Exception:
 # FastAPI app can start even when Selenium/chromedriver aren't installed.
 
 TARGET = "https://lernen.min.uni-hamburg.de/my/"
+latestMessage = ""
 
 app = FastAPI()
 
@@ -409,10 +410,14 @@ def ask_gemini_exams(exams_text: str) -> str:
         model="gemini-2.0-flash", 
         config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."),
         contents="Hier sind meine Stine-Prüfungen:\n" + exams_text
-    )
-    return response.text + "\nSoll ich dir die Termine in deinen Kalender eintragen?"
+    ) 
+    # Normalize the response text and append the calendar question (same wording used elsewhere)
+    resp_text = response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    global latestMessage
+    latestMessage = resp_text
+    return resp_text
 
-def ask_gemini(termine: str) -> str:
+def ask_gemini_moodle(termine: str) -> str:
     """Send a prompt to Gemini and return the response text."""
     try:
         from google import genai
@@ -428,8 +433,11 @@ def ask_gemini(termine: str) -> str:
             + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
             + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
             " Unterscheide zwischen endenden und beginnenden Terminen."
-        )
-    return response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+        ) 
+    resp_text = response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    global latestMessage
+    latestMessage = resp_text
+    return resp_text
 
 
 async def determine_intent(message: str) -> str:
@@ -442,7 +450,7 @@ async def determine_intent(message: str) -> str:
     labels = [
         "get_moodle_appointments",
         "get_stine_messages",
-        "get_steine_exams",
+        "get_stine_exams",
         "get_mail",
         "greeting",
         "help",
@@ -502,6 +510,53 @@ async def determine_intent(message: str) -> str:
     logging.error("Intent detection failed after %d attempts for message: %s", max_retries, msg)
     return "unknown"
 
+def make_calendar_entries(termine: str):
+    # ask gemini to parse the dates into calendar entries
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        return "Fehler: 'google' Paket nicht installiert."
+    
+    client = genai.Client()
+    response = client.models.generate_content(
+        model="gemini-2.0-flash", 
+        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Termine als ics Dateien formatiert."),
+        contents="Hier sind meine Termine:\n" + termine
+            + "\nFormatiere diese Termine als Kalender-Einträge im ICS-Format. Antworte nur mit dem reinen ICS-Dateiinhalt ohne zusätzliche Erklärungen."
+            + "\nÜberspringe alle Termine, die kein Datum haben."
+        )
+    # Persist the raw ICS text to a timestamped debug file for troubleshooting and return filename.
+    saved_basename = None
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_dir = os.path.dirname(__file__)
+        debug_path = os.path.join(debug_dir, f"debug_ics_response_{timestamp}.ics")
+        with open(debug_path, "w", encoding="utf-8") as f:
+            f.write(response.text or "")
+        saved_basename = os.path.basename(debug_path)
+        logging.info("Wrote ICS debug file: %s", debug_path)
+    except Exception as e:
+        logging.warning("Could not write ICS debug file: %s", e)
+
+    # Return a tuple (basename or None, raw_text)
+    return saved_basename, (response.text or "")
+
+
+@app.get('/download_ics/{filename}')
+def download_ics(filename: str):
+    """Serve a previously saved ICS debug file. Only allow filenames starting with the expected prefix to
+    avoid exposing arbitrary files.
+    """
+    if not filename.startswith("debug_ics_response_") or not filename.endswith('.ics'):
+        return Response(status_code=404)
+    debug_dir = os.path.dirname(__file__)
+    path = os.path.join(debug_dir, filename)
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    # Use FileResponse to stream the file and suggest a download filename
+    return FileResponse(path, media_type='text/calendar', filename=filename)
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     # Use Gemini to classify the user's intent. If Gemini fails, determine_intent
@@ -544,7 +599,7 @@ async def chat(request: ChatRequest):
     if intent == "get_moodle_appointments":
         try:
             termine = scrape_moodle_text(request.username, request.password)
-            response = ask_gemini(termine)
+            response = ask_gemini_moodle(termine)
             # If Gemini asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
@@ -556,10 +611,16 @@ async def chat(request: ChatRequest):
             return {"response": response}
     elif intent == "get_stine_messages":
         return {"response": "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."}
-    elif intent == "get_steine_exams":
+    elif intent == "get_stine_exams":
         try:
             exams_text = scrape_stine_exams(request.username, request.password)
-            return {"response": ask_gemini_exams(exams_text)}
+            response = ask_gemini_exams(exams_text)
+            # If Gemini asked whether to add events to calendar, mark state so the next short reply
+            # can be interpreted as consent/denial. We only set this for the requesting user.
+            if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
+                with state_lock:
+                    conversation_state[username] = { 'awaiting_calendar': True, 'ts': time.time() }
+            return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen der Stine-Prüfungen: {e}"
             return {"response": response}
@@ -570,16 +631,20 @@ async def chat(request: ChatRequest):
     elif intent == "help":
         return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
     elif intent == "calendar_yes":
-        # User agreed to add appointments to their calendar. We don't implement calendar integration here,
-        # so give a helpful, honest reply and next steps the user can take.
-        # clear awaiting flag for this user
+        # proceed to create calendar entries
         with state_lock:
             if username in conversation_state:
                 del conversation_state[username]
-        return {"response": (
-            "Alles klar — ich würde die Termine jetzt in deinen Kalender eintragen. "
-            "Hinweis: Die eigentliche Kalenderintegration ist derzeit noch nicht implementiert. "
-        )}
+        try:
+            termine = latestMessage
+            saved_basename, ics_content = make_calendar_entries(termine)
+            resp = {"response": "Hier sind die Kalender-Einträge im ICS-Format:", "ics": ics_content}
+            if saved_basename:
+                resp["ics_filename"] = saved_basename
+            return resp
+        except Exception as e:
+            response = f"Fehler beim Erstellen der Kalender-Einträge: {e}"
+            return {"response": response}
     elif intent == "calendar_no":
         # clear awaiting flag for this user
         with state_lock:
@@ -587,16 +652,6 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         return {"response": "Alles klar. Mit was kann ich dir sonst helfen?"}
     else:
-        # As a safety net, also accept the old keyword check (keeps behaviour if Gemini fails)
-        msg = request.message.lower()
-        if "termin" in msg:
-            try:
-                termine = scrape_moodle_text(request.username, request.password)
-                response = ask_gemini(termine)
-                return {"response": response}
-            except Exception as e:
-                response = f"Fehler beim Abrufen: {e}"
-                return {"response": response}
         return {"response": "Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen."}
 
 
