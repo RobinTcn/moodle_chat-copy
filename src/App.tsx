@@ -186,7 +186,7 @@ function App() {
           <div>
             {messages.map((m,i)=>(
               <div key={i} className={`flex mb-2 ${m.sender==="user"?"justify-end":"justify-start"}`}>
-                <div className={`rounded-lg p-3 max-w-xs ${m.sender==="user"?"bg-green-500 text-white":"bg-gray-300 text-black"}`}>
+                <div className={`rounded-lg p-3 max-w-lg ${m.sender==="user"?"bg-green-500 text-white":"bg-gray-300 text-black"}`}>
                   {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
                   {m.sender === "bot" ? (
                     <div
