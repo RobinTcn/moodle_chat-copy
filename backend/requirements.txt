@@ -1,11 +1,30 @@
 # Backend Python dependencies required by backend.py
-
-beautifulsoup4
+# Core web / API
 fastapi
-google-generativeai
-pydantic
-python-dotenv
-requests
-selenium
 uvicorn[standard]
 
+# Data / parsing
+beautifulsoup4
+
+# HTTP
+requests
+
+# Selenium for browser automation
+selenium
+# Optional helpers for providing a chromedriver binary or manager (Windows):
+chromedriver-binary
+webdriver-manager
+
+# Google GenAI client used in the code (provides `google.genai`)
+google-genai
+google-auth
+
+# Environment variables and config
+python-dotenv
+
+# Typed models
+pydantic
+
+# Note: The project imports `from bs4 import BeautifulSoup` (provided by beautifulsoup4)
+# and `from google import genai` (provided by google-genai). Selenium still requires a
+# matching Chrome/Chromium and ChromeDriver on PATH or using a manager like webdriver-manager.
