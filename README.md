@@ -13,10 +13,13 @@ Secondly, open up two powershell terminals. In one, open `\backend\`, in the oth
 In your `\backend\`command line, run these two commands:
 
 `.\.venv\Scripts\Activate.ps1` 
+(for macOS it is `python3 -m venv .venv` and then `source .venv/bin/activate`)
 
 `uvicorn backend:app --reload --port 8000`
 
 ### Start frontend:
+Before starting your frontend, ensure that you have Node.js installed on your device.
+
 In your `\frontend\`command line, run these two commands:
 
 `npm install`
