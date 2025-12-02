@@ -171,89 +171,7 @@ def scrape_moodle_text(username, password, headless=True, max_wait=25):
             block = re.sub(r"(?i)^\s*Aktuelle Termine\s*[:\-\–\—]?\s*", "", block)
         else:
             block = visible_text
-
-        # Jetzt: parse mögliche Termin-Zeilen aus `block`.
-        # Ziel: eine robuste Extraktion von Aktivität, Modul und Fälligkeitsdatum/-zeit
-        month_map = {
-            'januar':1,'februar':2,'märz':3,'maerz':3,'april':4,'mai':5,'juni':6,'juli':7,'august':8,'september':9,'oktober':10,'november':11,'dezember':12
-        }
-
-        def parse_line_into_entry(line: str):
-            # Entferne überflüssige Whitespace
-            s = re.sub(r"\s+", " ", line).strip()
-            if not s:
-                return None
-
-
-            # Versuche, Aktivität und Kurs/Modul zu ermitteln
-            activity = ''
-            course = ''
-
-            # Split before ' ist ' or before the date if present
-            split_point = None
-            m_ist = re.search(r"\bist\b|\bist\s+am\b|\bfällig\b", s, re.I)
-            if m_ist:
-                split_point = m_ist.start()
-
-            left = s if split_point is None else s[:split_point].strip()
-
-            # Suche nach gängigen Trennwörtern (in, im, für, vom, von, aus)
-            sep = re.search(r"\b(in|im|für|vom|von|aus)\b", left, re.I)
-            if sep:
-                # activity = text before separator; course = text after
-                activity = left[:sep.start()].strip(" -:\t")
-                course = left[sep.end():].strip(" -:\t")
-            else:
-                # Try other separators like ' - '
-                if ' - ' in left:
-                    parts = left.split(' - ', 1)
-                    activity = parts[0].strip()
-                    course = parts[1].strip()
-                else:
-                    activity = left
-
-            # Cleanup words like leading 'Aktivität' etc.
-            activity = re.sub(r"(?i)^Aktivit\w+\s*[:\-\–\—]?\s*", "", activity).strip()
-
-            return {
-                'activity': activity or None,
-                'course': course or None,
-                'original': s
-            }
-
-        entries = []
-        # Zerlege Block in Zeilen und untersuche jede
-        for line in block.splitlines():
-            # pick lines containing keyword 'fällig' or a date pattern
-            lower_line = line.lower()
-            # filter out obvious UI strings (e.g. 'Überfällig Filteroption')
-            if 'filteroption' in lower_line or lower_line.strip() == 'überfällig' or lower_line.strip().startswith('überfällig filter'):
-                continue
-            if 'fällig' in lower_line or re.search(r"\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4}", line):
-                e = parse_line_into_entry(line)
-                if e:
-                    entries.append(e)
-
-        
-        # Baue die Rückgabe-Textdarstellung, die an Gemini geschickt wird
-        if entries:
-            lines = []
-            for e in entries:
-                parts = []
-                if e.get('activity'):
-                    parts.append(f"Aktivität: {e['activity']}")
-                if e.get('course'):
-                    parts.append(f"Modul: {e['course']}")
-                if e.get('due_iso'):
-                    parts.append(f"Fällig: {e['due_iso']}")
-                else:
-                    # If no ISO date, include original text to preserve info
-                    parts.append(f"Info: {e['original']}")
-                lines.append(' | '.join(parts))
-            termine_text = "\n".join(lines)
-            return termine_text
-        else:
-            return visible_text
+        return visible_text
 
     except Exception as e:
         return f"Fehler beim Scraping: {e}"
@@ -432,7 +350,8 @@ def ask_gemini_moodle(termine: str) -> str:
         contents="Hier sind meine Moodle-Aufgaben:\n" + termine 
             + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
             + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
-            " Unterscheide zwischen endenden und beginnenden Terminen."
+            + " Unterscheide zwischen endenden und beginnenden Terminen."
+            + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
         ) 
     resp_text = response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
     global latestMessage
