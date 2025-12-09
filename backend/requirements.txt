@@ -24,6 +24,9 @@ python-dotenv
 # Typed models
 pydantic
 
+# Encryption for secure local credential storage
+cryptography
+
 # Note: The project imports `from bs4 import BeautifulSoup` (provided by beautifulsoup4)
 # and `from google import genai` (provided by google-genai). Selenium still requires a
 # matching Chrome/Chromium and ChromeDriver on PATH or using a manager like webdriver-manager.

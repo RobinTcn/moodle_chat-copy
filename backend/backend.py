@@ -14,6 +14,10 @@ import time
 import threading
 import sys
 import webbrowser
+import json
+import hashlib
+from pathlib import Path
+from cryptography.fernet import Fernet
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -30,6 +34,103 @@ except Exception:
 TARGET = "https://lernen.min.uni-hamburg.de/my/"
 latestMessage = ""
 
+
+# ============================================================================
+# Secure Credential Storage (device-based encryption)
+# ============================================================================
+
+def _get_credentials_dir() -> Path:
+    """Get the directory where encrypted credentials are stored."""
+    # Use AppData on Windows, ~/.config on Linux/Mac
+    if sys.platform == "win32":
+        base = Path(os.getenv("APPDATA", os.path.expanduser("~")))
+        cred_dir = base / "StudiBot"
+    else:
+        cred_dir = Path.home() / ".config" / "studibot"
+    
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    return cred_dir
+
+
+def _get_device_key() -> bytes:
+    """Generate a device-specific encryption key.
+    
+    This creates a consistent key based on machine-specific data.
+    The key is derived from hardware/system identifiers.
+    """
+    # Combine multiple system identifiers for uniqueness
+    identifiers = [
+        os.getenv("COMPUTERNAME", ""),  # Windows
+        os.getenv("HOSTNAME", ""),       # Linux/Mac
+        os.getenv("USERNAME", ""),
+        str(Path.home()),
+    ]
+    
+    # Create a stable hash from identifiers
+    combined = "|".join(identifiers).encode("utf-8")
+    key_material = hashlib.sha256(combined).digest()
+    
+    # Fernet requires a base64-encoded 32-byte key
+    import base64
+    return base64.urlsafe_b64encode(key_material)
+
+
+def _encrypt_data(data: dict) -> bytes:
+    """Encrypt a dictionary to bytes using device-specific key."""
+    key = _get_device_key()
+    cipher = Fernet(key)
+    json_data = json.dumps(data).encode("utf-8")
+    return cipher.encrypt(json_data)
+
+
+def _decrypt_data(encrypted: bytes) -> dict:
+    """Decrypt bytes back to a dictionary."""
+    key = _get_device_key()
+    cipher = Fernet(key)
+    json_data = cipher.decrypt(encrypted)
+    return json.loads(json_data.decode("utf-8"))
+
+
+def save_credentials(username: str, password: str, api_key: str) -> bool:
+    """Save encrypted credentials to local file."""
+    try:
+        cred_file = _get_credentials_dir() / "credentials.enc"
+        data = {
+            "username": username,
+            "password": password,
+            "api_key": api_key,
+        }
+        encrypted = _encrypt_data(data)
+        cred_file.write_bytes(encrypted)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to save credentials: {e}")
+        return False
+
+
+def load_credentials() -> Optional[dict]:
+    """Load and decrypt credentials from local file."""
+    try:
+        cred_file = _get_credentials_dir() / "credentials.enc"
+        if not cred_file.exists():
+            return None
+        encrypted = cred_file.read_bytes()
+        return _decrypt_data(encrypted)
+    except Exception as e:
+        logging.error(f"Failed to load credentials: {e}")
+        return None
+
+
+def delete_credentials() -> bool:
+    """Delete stored credentials file."""
+    try:
+        cred_file = _get_credentials_dir() / "credentials.enc"
+        if cred_file.exists():
+            cred_file.unlink()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to delete credentials: {e}")
+        return False
 
 def _resolve_frontend_dist() -> Optional[str]:
     """Locate the built frontend (Vite dist) folder for static serving.
@@ -84,6 +185,18 @@ class ChatRequest(BaseModel):
     message: str
     username: str
     password: str
+    api_key: Optional[str] = None
+
+
+class CredentialsSaveRequest(BaseModel):
+    username: str
+    password: str
+    api_key: str
+
+
+class CredentialsResponse(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
     api_key: Optional[str] = None
 
 
@@ -654,6 +767,44 @@ async def chat(request: ChatRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ============================================================================
+# Credential Management Endpoints
+# ============================================================================
+
+@app.post("/credentials/save")
+def api_save_credentials(req: CredentialsSaveRequest):
+    """Save encrypted credentials to local device storage."""
+    success = save_credentials(req.username, req.password, req.api_key)
+    if success:
+        return {"success": True, "message": "Credentials saved successfully"}
+    else:
+        return {"success": False, "message": "Failed to save credentials"}
+
+
+@app.get("/credentials/load")
+def api_load_credentials() -> CredentialsResponse:
+    """Load encrypted credentials from local device storage."""
+    creds = load_credentials()
+    if creds:
+        return CredentialsResponse(
+            username=creds.get("username"),
+            password=creds.get("password"),
+            api_key=creds.get("api_key")
+        )
+    else:
+        return CredentialsResponse()
+
+
+@app.delete("/credentials/delete")
+def api_delete_credentials():
+    """Delete stored credentials from local device storage."""
+    success = delete_credentials()
+    if success:
+        return {"success": True, "message": "Credentials deleted successfully"}
+    else:
+        return {"success": False, "message": "Failed to delete credentials"}
 
 
 @app.get("/", response_class=HTMLResponse)
