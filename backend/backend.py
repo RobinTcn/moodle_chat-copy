@@ -402,7 +402,7 @@ async def determine_intent(message: str) -> str:
         client = genai.Client()
         return client.models.generate_content(model="gemini-2.0-flash", contents=inner_prompt)
 
-    max_retries = 3
+    max_retries = 1
     backoff_base = 0.5
     for attempt in range(1, max_retries + 1):
         try:
