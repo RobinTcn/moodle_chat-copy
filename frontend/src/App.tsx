@@ -101,71 +101,70 @@ function App() {
   const [showApiModal, setShowApiModal] = useState(false);
   const [selectedTab, setSelectedTab] = useState<"calendar"|"chat"|"settings">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const backendBase = "http://127.0.0.1:8000";
 
-  // Load saved credentials from localStorage on first render
+  // Load saved credentials from backend on first render
   useEffect(() => {
-    try {
-      const su = localStorage.getItem('moodle_username');
-      const sp = localStorage.getItem('moodle_password');
-      if (su) setUsername(su);
-      if (sp) setPassword(sp);
-    } catch (e) {
-      // ignore (e.g. localStorage not available)
-    }
-  }, []);
-
-  // Load stored API key once
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem('openai_api_key');
-      if (stored) {
-        setApiKey(stored);
-        setApiKeyInput(stored);
-      } else {
+    (async () => {
+      try {
+        const res = await axios.get<{ username?: string; password?: string; api_key?: string }>(`${backendBase}/credentials/load`);
+        if (res.data.username) setUsername(res.data.username);
+        if (res.data.password) setPassword(res.data.password);
+        if (res.data.api_key) {
+          setApiKey(res.data.api_key);
+          setApiKeyInput(res.data.api_key);
+        } else {
+          setShowApiModal(true);
+        }
+      } catch (e) {
+        // Backend not available or no credentials stored
         setShowApiModal(true);
       }
-    } catch (e) {
-      setShowApiModal(true);
-    }
+    })();
   }, []);
 
-  // Persist credentials to localStorage whenever they change
+  // Persist credentials to backend whenever they change
   useEffect(() => {
-    try {
-      if (username) localStorage.setItem('moodle_username', username);
-      else localStorage.removeItem('moodle_username');
-      if (password) localStorage.setItem('moodle_password', password);
-      else localStorage.removeItem('moodle_password');
-    } catch (e) {
-      // ignore
-    }
-  }, [username, password]);
+    if (!username || !password || !apiKey) return;
+    (async () => {
+      try {
+        await axios.post(`${backendBase}/credentials/save`, {
+          username,
+          password,
+          api_key: apiKey
+        });
+      } catch (e) {
+        console.error('Failed to save credentials:', e);
+      }
+    })();
+  }, [username, password, apiKey]);
 
-  const clearCredentials = () => {
+  const clearCredentials = async () => {
     setUsername("");
     setPassword("");
     try {
-      localStorage.removeItem('moodle_username');
-      localStorage.removeItem('moodle_password');
-    } catch (e) {}
+      await axios.delete(`${backendBase}/credentials/delete`);
+    } catch (e) {
+      console.error('Failed to delete credentials:', e);
+    }
   };
 
-  const saveApiKey = () => {
+  const saveApiKey = async () => {
     const trimmed = apiKeyInput.trim();
     if (!trimmed) return;
     setApiKey(trimmed);
-    try {
-      localStorage.setItem('openai_api_key', trimmed);
-    } catch (e) {}
     setShowApiModal(false);
+    // API key wird automatisch durch useEffect gespeichert
   };
 
-  const clearApiKey = () => {
+  const clearApiKey = async () => {
     setApiKey("");
     setApiKeyInput("");
     try {
-      localStorage.removeItem('openai_api_key');
-    } catch (e) {}
+      await axios.delete(`${backendBase}/credentials/delete`);
+    } catch (e) {
+      console.error('Failed to delete API key:', e);
+    }
     setShowApiModal(true);
   };
 
@@ -188,7 +187,6 @@ function App() {
     setMessages(prev => [...prev, { sender: "user", text: userMessage }, { sender: "bot", text: typingHtml }]);
 
     try {
-      const backendBase = "http://127.0.0.1:8000";
       const res = await axios.post<ChatResponse>(`${backendBase}/chat`, {
         message: userMessage,
         username,
