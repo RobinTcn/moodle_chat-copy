@@ -1,6 +1,7 @@
 # backend.py
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -11,6 +12,8 @@ import asyncio
 import datetime
 import time
 import threading
+import sys
+import webbrowser
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -27,6 +30,36 @@ except Exception:
 TARGET = "https://lernen.min.uni-hamburg.de/my/"
 latestMessage = ""
 
+
+def _resolve_frontend_dist() -> Optional[str]:
+    """Locate the built frontend (Vite dist) folder for static serving.
+
+    Supports running from source as well as PyInstaller onefile bundles (using _MEIPASS).
+    Returns an absolute path or None if no build is found.
+    """
+    candidates = []
+
+    # PyInstaller onefile extracts into a temp dir pointed to by _MEIPASS
+    if getattr(sys, "_MEIPASS", None):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+        candidates.append(os.path.join(base, "frontend", "dist"))
+        candidates.append(os.path.join(base, "dist"))
+
+    here = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(here, os.pardir))
+    candidates.append(os.path.join(here, "frontend", "dist"))
+    candidates.append(os.path.join(project_root, "frontend", "dist"))
+    candidates.append(os.path.join(project_root, "dist"))
+
+    for path in candidates:
+        index_path = os.path.join(path, "index.html")
+        if os.path.isfile(index_path):
+            return os.path.abspath(path)
+    return None
+
+
+FRONTEND_DIST = _resolve_frontend_dist()
+
 app = FastAPI()
 
 app.add_middleware(
@@ -42,10 +75,24 @@ conversation_state = {}
 state_lock = threading.Lock()
 STATE_EXPIRY_SECONDS = 120  # consent expires after 2 minutes
 
+if FRONTEND_DIST:
+    assets_path = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.isdir(assets_path):
+        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+
 class ChatRequest(BaseModel):
     message: str
     username: str
     password: str
+    api_key: Optional[str] = None
+
+
+def _pick_api_key(provided: Optional[str]) -> Optional[str]:
+    key = (provided or "").strip()
+    if key:
+        return key
+    env_key = os.getenv("OPENAI_API_KEY", "").strip()
+    return env_key or None
 
 def scrape_moodle_text(username, password, headless=True, max_wait=25):
     # Import heavy/optional deps here so the app can still start without them.
@@ -315,16 +362,20 @@ def format_exams_text(raw_text: str) -> str:
         lines.append(line.strip())
     return "\n".join(lines)
 
-def ask_chatgpt_exams(exams_text: str) -> str:
+def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
     """Send a prompt to ChatGPT and return the response text."""
     try:
         from openai import OpenAI
     except ImportError:
         return "Fehler: 'openai' Paket nicht installiert."
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    key = _pick_api_key(api_key)
+    if not key:
+        return "Kein API-Key vorhanden. Bitte in der App speichern und erneut versuchen."
+
+    client = OpenAI(api_key=key)
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."},
             {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text}
@@ -336,14 +387,18 @@ def ask_chatgpt_exams(exams_text: str) -> str:
     latestMessage = resp_text
     return resp_text
 
-def ask_chatgpt_moodle(termine: str) -> str:
+def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
     """Send a prompt to ChatGPT and return the response text."""
     try:
         from openai import OpenAI
     except ImportError:
         return "Fehler: 'openai' Paket nicht installiert."
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    key = _pick_api_key(api_key)
+    if not key:
+        return "Kein API-Key vorhanden. Bitte in der App speichern und erneut versuchen."
+
+    client = OpenAI(api_key=key)
     user_message = (
         "Hier sind meine Moodle-Aufgaben:\n" + termine 
         + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
@@ -352,7 +407,7 @@ def ask_chatgpt_moodle(termine: str) -> str:
         + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
     )
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst."},
             {"role": "user", "content": user_message}
@@ -364,7 +419,7 @@ def ask_chatgpt_moodle(termine: str) -> str:
     return resp_text
 
 
-async def determine_intent(message: str) -> str:
+async def determine_intent(message: str, api_key: Optional[str]) -> str:
     """Asynchronously determine the user's intent by asking Gemini.
 
     Retries on transient errors to be more robust when many requests arrive quickly.
@@ -404,9 +459,12 @@ async def determine_intent(message: str) -> str:
             from openai import OpenAI
         except Exception:
             raise
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        key = _pick_api_key(api_key)
+        if not key:
+            raise RuntimeError("Kein API-Key konfiguriert")
+        client = OpenAI(api_key=key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": inner_prompt}]
         )
         return response.choices[0].message.content
@@ -436,21 +494,25 @@ async def determine_intent(message: str) -> str:
     logging.error("Intent detection failed after %d attempts for message: %s", max_retries, msg)
     return "unknown"
 
-def make_calendar_entries(termine: str):
+def make_calendar_entries(termine: str, api_key: Optional[str]):
     # ask ChatGPT to parse the dates into calendar entries
     try:
         from openai import OpenAI
     except ImportError:
         return "Fehler: 'openai' Paket nicht installiert."
-    
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    key = _pick_api_key(api_key)
+    if not key:
+        return None, "Kein API-Key vorhanden. Bitte in der App speichern und erneut versuchen."
+
+    client = OpenAI(api_key=key)
     user_message = (
         "Hier sind meine Termine:\n" + termine
         + "\nFormatiere diese Termine als Kalender-Einträge im ICS-Format. Antworte nur mit dem reinen ICS-Dateiinhalt ohne zusätzliche Erklärungen."
         + "\nÜberspringe alle Termine, die kein Datum haben."
     )
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Termine als ics Dateien formatiert."},
             {"role": "user", "content": user_message}
@@ -493,6 +555,9 @@ async def chat(request: ChatRequest):
     # Use Gemini to classify the user's intent. If Gemini fails, determine_intent
     # will return 'unknown' and we fall back to a simple keyword check.
     username = request.username
+    api_key = _pick_api_key(request.api_key)
+    if not api_key:
+        return {"response": "Kein API-Key gesetzt. Bitte den ChatGPT-Key beim Start speichern oder in den Einstellungen hinzufügen."}
 
     # Check and expire any old conversation state for this user
     with state_lock:
@@ -515,7 +580,7 @@ async def chat(request: ChatRequest):
         # If message isn't a clear yes/no, fall back to full intent detection (below)
 
     if intent is None:
-        intent = await determine_intent(request.message)
+        intent = await determine_intent(request.message, api_key)
     else:
         # If we already set intent based on local short-reply parsing, keep it.
         pass
@@ -530,7 +595,7 @@ async def chat(request: ChatRequest):
     if intent == "get_moodle_appointments":
         try:
             termine = scrape_moodle_text(request.username, request.password)
-            response = ask_chatgpt_moodle(termine)
+            response = ask_chatgpt_moodle(termine, api_key)
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
@@ -545,7 +610,7 @@ async def chat(request: ChatRequest):
     elif intent == "get_stine_exams":
         try:
             exams_text = scrape_stine_exams(request.username, request.password)
-            response = ask_chatgpt_exams(exams_text)
+            response = ask_chatgpt_exams(exams_text, api_key)
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
@@ -568,7 +633,7 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         try:
             termine = latestMessage
-            saved_basename, ics_content = make_calendar_entries(termine)
+            saved_basename, ics_content = make_calendar_entries(termine, api_key)
             resp = {"response": "Hier sind die Kalender-Einträge im ICS-Format:", "ics": ics_content}
             if saved_basename:
                 resp["ics_filename"] = saved_basename
@@ -593,7 +658,10 @@ def health():
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    """Simple root page to avoid 404s when opening http://127.0.0.1:8000/ in a browser."""
+    if FRONTEND_DIST:
+        index_path = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path, media_type="text/html")
     return HTMLResponse(
         "<html><head><title>Moodle Chat Backend</title></head><body>"
         "<h1>Moodle Chat Backend</h1>"
@@ -602,7 +670,31 @@ def root():
     )
 
 
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def spa_fallback(full_path: str):
+    if FRONTEND_DIST:
+        index_path = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path, media_type="text/html")
+    return Response(status_code=404)
+
+
 @app.get('/favicon.ico')
 def favicon():
     """Return no content for favicon requests to avoid 404 noise in logs."""
     return Response(status_code=204)
+
+
+
+if __name__ == "__main__":
+    def _open_browser():
+        try:
+            time.sleep(1)
+            webbrowser.open("http://127.0.0.1:8000")
+        except Exception:
+            pass
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

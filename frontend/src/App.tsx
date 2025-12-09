@@ -96,6 +96,9 @@ function App() {
   const [input, setInput] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [showApiModal, setShowApiModal] = useState(false);
   const [selectedTab, setSelectedTab] = useState<"calendar"|"chat"|"settings">("chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -108,6 +111,21 @@ function App() {
       if (sp) setPassword(sp);
     } catch (e) {
       // ignore (e.g. localStorage not available)
+    }
+  }, []);
+
+  // Load stored API key once
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('openai_api_key');
+      if (stored) {
+        setApiKey(stored);
+        setApiKeyInput(stored);
+      } else {
+        setShowApiModal(true);
+      }
+    } catch (e) {
+      setShowApiModal(true);
     }
   }, []);
 
@@ -132,11 +150,34 @@ function App() {
     } catch (e) {}
   };
 
+  const saveApiKey = () => {
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) return;
+    setApiKey(trimmed);
+    try {
+      localStorage.setItem('openai_api_key', trimmed);
+    } catch (e) {}
+    setShowApiModal(false);
+  };
+
+  const clearApiKey = () => {
+    setApiKey("");
+    setApiKeyInput("");
+    try {
+      localStorage.removeItem('openai_api_key');
+    } catch (e) {}
+    setShowApiModal(true);
+  };
+
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(scrollToBottom, [messages]);
 
   const sendMessage = async () => {
     if (!input.trim()) return;
+    if (!apiKey) {
+      setShowApiModal(true);
+      return;
+    }
     const userMessage = input;
     setInput("");
 
@@ -151,7 +192,8 @@ function App() {
       const res = await axios.post<ChatResponse>(`${backendBase}/chat`, {
         message: userMessage,
         username,
-        password
+        password,
+        api_key: apiKey
       });
       // Replace the typing indicator (last message) with the real response
       setMessages(prev => {
@@ -238,9 +280,45 @@ function App() {
             <div className="mt-4">
               <button onClick={clearCredentials} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">Anmeldedaten löschen</button>
             </div>
+
+            <div className="mt-8">
+              <h3 className="text-md font-medium mb-2">ChatGPT API-Key</h3>
+              <input
+                type="password"
+                placeholder="sk-..."
+                className="border rounded-lg p-2 w-full mb-2"
+                value={apiKeyInput}
+                onChange={e=>setApiKeyInput(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button onClick={saveApiKey} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg">API-Key speichern</button>
+                <button onClick={clearApiKey} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">API-Key löschen</button>
+              </div>
+              <div className="text-xs text-gray-500 mt-2">Der Key wird nur lokal gespeichert und bei API-Aufrufen mitgeschickt.</div>
+            </div>
           </div>
         )}
       </div>
+
+      {showApiModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-lg p-5 max-w-sm w-full">
+            <h3 className="text-lg font-medium mb-2">API-Key erforderlich</h3>
+            <p className="text-sm text-gray-600 mb-3">Bitte gib deinen ChatGPT API-Key ein. Er wird nur lokal gespeichert und für die Anfragen genutzt.</p>
+            <input
+              type="password"
+              placeholder="sk-..."
+              className="border rounded-lg p-2 w-full mb-3"
+              value={apiKeyInput}
+              onChange={e => setApiKeyInput(e.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowApiModal(false)} className="px-3 py-2 rounded border">Später</button>
+              <button onClick={saveApiKey} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded">Speichern</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bottom navigation (extracted) */}
       <BottomNav selectedTab={selectedTab} onSelect={setSelectedTab} />
