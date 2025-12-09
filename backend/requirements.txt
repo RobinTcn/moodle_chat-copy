@@ -15,9 +15,8 @@ selenium
 chromedriver-binary
 webdriver-manager
 
-# Google GenAI client used in the code (provides `google.genai`)
-google-genai
-google-auth
+# OpenAI API client for ChatGPT
+openai
 
 # Environment variables and config
 python-dotenv

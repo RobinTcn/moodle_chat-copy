@@ -315,45 +315,50 @@ def format_exams_text(raw_text: str) -> str:
         lines.append(line.strip())
     return "\n".join(lines)
 
-def ask_gemini_exams(exams_text: str) -> str:
-    """Send a prompt to Gemini and return the response text."""
+def ask_chatgpt_exams(exams_text: str) -> str:
+    """Send a prompt to ChatGPT and return the response text."""
     try:
-        from google import genai
-        from google.genai import types
+        from openai import OpenAI
     except ImportError:
-        return "Fehler: 'google' Paket nicht installiert."
+        return "Fehler: 'openai' Paket nicht installiert."
 
-    client = genai.Client()
-    response = client.models.generate_content(
-        model="gemini-2.0-flash", 
-        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."),
-        contents="Hier sind meine Stine-Prüfungen:\n" + exams_text
-    ) 
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."},
+            {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text}
+        ]
+    )
     # Normalize the response text and append the calendar question (same wording used elsewhere)
-    resp_text = response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    resp_text = response.choices[0].message.content + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
     global latestMessage
     latestMessage = resp_text
     return resp_text
 
-def ask_gemini_moodle(termine: str) -> str:
-    """Send a prompt to Gemini and return the response text."""
+def ask_chatgpt_moodle(termine: str) -> str:
+    """Send a prompt to ChatGPT and return the response text."""
     try:
-        from google import genai
-        from google.genai import types
+        from openai import OpenAI
     except ImportError:
-        return "Fehler: 'google' Paket nicht installiert."
+        return "Fehler: 'openai' Paket nicht installiert."
 
-    client = genai.Client()
-    response = client.models.generate_content(
-        model="gemini-2.0-flash", 
-        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst."),
-        contents="Hier sind meine Moodle-Aufgaben:\n" + termine 
-            + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
-            + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
-            + " Unterscheide zwischen endenden und beginnenden Terminen."
-            + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
-        ) 
-    resp_text = response.text + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    user_message = (
+        "Hier sind meine Moodle-Aufgaben:\n" + termine 
+        + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
+        + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
+        + " Unterscheide zwischen endenden und beginnenden Terminen."
+        + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst."},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    resp_text = response.choices[0].message.content + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
     global latestMessage
     latestMessage = resp_text
     return resp_text
@@ -394,32 +399,34 @@ async def determine_intent(message: str) -> str:
     )
 
     # Blocking call will run in a thread to avoid blocking the event loop.
-    def _call_genai(inner_prompt: str):
+    def _call_openai(inner_prompt: str):
         try:
-            from google import genai
+            from openai import OpenAI
         except Exception:
             raise
-        client = genai.Client()
-        return client.models.generate_content(model="gemini-2.0-flash", contents=inner_prompt)
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": inner_prompt}]
+        )
+        return response.choices[0].message.content
 
     max_retries = 1
     backoff_base = 0.5
     for attempt in range(1, max_retries + 1):
         try:
-            response = await asyncio.to_thread(_call_genai, prompt)
+            response = await asyncio.to_thread(_call_openai, prompt)
             # parse the model response robustly
-            intent_text = ""
-            if hasattr(response, 'text') and response.text:
-                intent_text = response.text.strip().splitlines()[0].strip()
+            intent_text = response.strip().splitlines()[0].strip() if response else ""
             if intent_text in labels:
                 return intent_text
             for lab in labels:
-                if lab in getattr(response, 'text', ''):
+                if lab in response:
                     return lab
-            logging.info("Gemini returned unexpected intent text (attempt %d): %s", attempt, getattr(response, 'text', response))
+            logging.info("ChatGPT returned unexpected intent text (attempt %d): %s", attempt, response)
             # If model returned something unexpected, retry a couple times
         except Exception as e:
-            logging.warning("Attempt %d: Error calling Gemini for intent detection: %s", attempt, e)
+            logging.warning("Attempt %d: Error calling ChatGPT for intent detection: %s", attempt, e)
 
         # backoff before retrying
         if attempt < max_retries:
@@ -430,36 +437,41 @@ async def determine_intent(message: str) -> str:
     return "unknown"
 
 def make_calendar_entries(termine: str):
-    # ask gemini to parse the dates into calendar entries
+    # ask ChatGPT to parse the dates into calendar entries
     try:
-        from google import genai
-        from google.genai import types
+        from openai import OpenAI
     except ImportError:
-        return "Fehler: 'google' Paket nicht installiert."
+        return "Fehler: 'openai' Paket nicht installiert."
     
-    client = genai.Client()
-    response = client.models.generate_content(
-        model="gemini-2.0-flash", 
-        config=types.GenerateContentConfig(system_instruction="Du bist ein hilfreicher Assistent, der Termine als ics Dateien formatiert."),
-        contents="Hier sind meine Termine:\n" + termine
-            + "\nFormatiere diese Termine als Kalender-Einträge im ICS-Format. Antworte nur mit dem reinen ICS-Dateiinhalt ohne zusätzliche Erklärungen."
-            + "\nÜberspringe alle Termine, die kein Datum haben."
-        )
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    user_message = (
+        "Hier sind meine Termine:\n" + termine
+        + "\nFormatiere diese Termine als Kalender-Einträge im ICS-Format. Antworte nur mit dem reinen ICS-Dateiinhalt ohne zusätzliche Erklärungen."
+        + "\nÜberspringe alle Termine, die kein Datum haben."
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Termine als ics Dateien formatiert."},
+            {"role": "user", "content": user_message}
+        ]
+    )
     # Persist the raw ICS text to a timestamped debug file for troubleshooting and return filename.
+    ics_content = response.choices[0].message.content or ""
     saved_basename = None
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         debug_dir = os.path.dirname(__file__)
         debug_path = os.path.join(debug_dir, f"debug_ics_response_{timestamp}.ics")
         with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(response.text or "")
+            f.write(ics_content)
         saved_basename = os.path.basename(debug_path)
         logging.info("Wrote ICS debug file: %s", debug_path)
     except Exception as e:
         logging.warning("Could not write ICS debug file: %s", e)
 
     # Return a tuple (basename or None, raw_text)
-    return saved_basename, (response.text or "")
+    return saved_basename, ics_content
 
 
 @app.get('/download_ics/{filename}')
@@ -518,8 +530,8 @@ async def chat(request: ChatRequest):
     if intent == "get_moodle_appointments":
         try:
             termine = scrape_moodle_text(request.username, request.password)
-            response = ask_gemini_moodle(termine)
-            # If Gemini asked whether to add events to calendar, mark state so the next short reply
+            response = ask_chatgpt_moodle(termine)
+            # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
                 with state_lock:
@@ -533,8 +545,8 @@ async def chat(request: ChatRequest):
     elif intent == "get_stine_exams":
         try:
             exams_text = scrape_stine_exams(request.username, request.password)
-            response = ask_gemini_exams(exams_text)
-            # If Gemini asked whether to add events to calendar, mark state so the next short reply
+            response = ask_chatgpt_exams(exams_text)
+            # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
                 with state_lock:
