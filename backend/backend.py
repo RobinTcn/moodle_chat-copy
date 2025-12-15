@@ -341,14 +341,69 @@ def favicon():
 
 
 if __name__ == "__main__":
-    def _open_browser():
-        try:
-            time.sleep(1)
-            webbrowser.open("http://127.0.0.1:8000")
-        except Exception:
-            pass
-
-    threading.Thread(target=_open_browser, daemon=True).start()
+    import subprocess
     import uvicorn
+    import socket
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    # Function to check if server is ready
+    def wait_for_server(host, port, timeout=30):
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex((host, port))
+                sock.close()
+                if result == 0:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return False
+
+    # Start FastAPI server in a separate thread
+    def start_server():
+        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    
+    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread.start()
+    
+    # Wait for server to be ready
+    print("Starting server...")
+    if wait_for_server("127.0.0.1", 8000):
+        print("Server is ready!")
+        
+        # Try to open in Chrome app mode (standalone window)
+        url = "http://127.0.0.1:8000"
+        try:
+            # Common Chrome paths on Windows
+            chrome_paths = [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]
+            
+            chrome_path = None
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    chrome_path = path
+                    break
+            
+            if chrome_path:
+                # Open Chrome in app mode (standalone window without browser UI)
+                subprocess.Popen([chrome_path, f"--app={url}", "--window-size=1200,800"])
+            else:
+                # Fallback to default browser
+                webbrowser.open(url)
+        except Exception:
+            # Fallback to default browser
+            webbrowser.open(url)
+    else:
+        print("Server failed to start!")
+    
+    # Keep the main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
