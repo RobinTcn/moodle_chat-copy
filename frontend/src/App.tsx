@@ -222,8 +222,8 @@ function App() {
         <h1 className="text-lg font-semibold">StudiBot</h1>
       </div>
 
-      {/* Main content area. We add bottom padding so the bottom nav doesn't overlap content. */}
-      <div className="flex-1 overflow-y-auto p-4 pb-24">
+      {/* Main content area. We add bottom padding so the bottom nav and chat input don't overlap content. */}
+      <div className="flex-1 overflow-y-auto p-4 pb-56">
         {selectedTab === "calendar" && (
           <div className="h-full">
             <Calendar />
