@@ -8,17 +8,18 @@ type Tab = 'calendar' | 'chat' | 'settings';
 interface Props {
   selectedTab: Tab;
   onSelect: (t: Tab) => void;
+  darkMode: boolean;
 }
 
-export default function BottomNav({ selectedTab, onSelect }: Props) {
+export default function BottomNav({ selectedTab, onSelect, darkMode }: Props) {
   return (
-    <nav className="fixed left-0 right-0 bottom-0 bg-white border-t">
+    <nav className={`fixed left-0 right-0 bottom-0 border-t ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'}`}>
       <div className="max-w-4xl mx-auto grid grid-cols-3">
         <button
           aria-label="Kalender"
           aria-pressed={selectedTab === 'calendar'}
           onClick={() => onSelect('calendar')}
-          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'calendar' ? 'text-green-600' : 'text-gray-600'}`}
+          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'calendar' ? 'text-green-600' : darkMode ? 'text-gray-300' : 'text-gray-600'}`}
         >
           <IoCalendarClearOutline className="w-6 h-6" aria-hidden />
           <span className="text-xs mt-1 hidden md:block">Kalender</span>
@@ -28,7 +29,7 @@ export default function BottomNav({ selectedTab, onSelect }: Props) {
           aria-label="Chat"
           aria-pressed={selectedTab === 'chat'}
           onClick={() => onSelect('chat')}
-          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'chat' ? 'text-green-600' : 'text-gray-600'}`}
+          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'chat' ? 'text-green-600' : darkMode ? 'text-gray-300' : 'text-gray-600'}`}
         >
           <IoChatbubbleOutline className="w-6 h-6" aria-hidden />
           <span className="text-xs mt-1 hidden md:block">Chat</span>
@@ -38,7 +39,7 @@ export default function BottomNav({ selectedTab, onSelect }: Props) {
           aria-label="Einstellungen"
           aria-pressed={selectedTab === 'settings'}
           onClick={() => onSelect('settings')}
-          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'settings' ? 'text-green-600' : 'text-gray-600'}`}
+          className={`flex flex-col items-center justify-center p-2 py-3 focus:outline-none ${selectedTab === 'settings' ? 'text-green-600' : darkMode ? 'text-gray-300' : 'text-gray-600'}`}
         >
           <IoSettingsOutline className="w-6 h-6" aria-hidden />
           <span className="text-xs mt-1 hidden md:block">Einstellungen</span>

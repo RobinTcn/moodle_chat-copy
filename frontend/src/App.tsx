@@ -100,8 +100,22 @@ function App() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
   const [selectedTab, setSelectedTab] = useState<"calendar"|"chat"|"settings">("chat");
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    return saved ? JSON.parse(saved) : false;
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const backendBase = "http://127.0.0.1:8000";
+
+  // Persist dark mode preference
+  useEffect(() => {
+    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
 
   // Load saved credentials from backend on first render
   useEffect(() => {
@@ -216,10 +230,28 @@ function App() {
   const handleKey = (e: React.KeyboardEvent) => { if (e.key==="Enter") sendMessage(); };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100">
-      {/* Top header: simple title */}
-      <div className="p-4 bg-white border-b flex items-center justify-center">
-        <h1 className="text-lg font-semibold">StudiBot</h1>
+    <div className={`flex flex-col h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-100'}`}>
+      {/* Top header: simple title with dark mode toggle */}
+      <div className={`p-4 border-b flex items-center justify-between ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'}`}>
+        <div className="flex-1" />
+        <h1 className={`text-lg font-semibold ${darkMode ? 'text-white' : 'text-black'}`}>StudiBot</h1>
+        <div className="flex-1 flex justify-end">
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className={`p-2 rounded-lg transition-colors ${darkMode ? 'bg-gray-700 hover:bg-gray-600 text-yellow-400' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+            aria-label="Toggle dark mode"
+          >
+            {darkMode ? (
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Main content area. We add bottom padding so the bottom nav and chat input don't overlap content. */}
@@ -234,7 +266,7 @@ function App() {
           <div>
             {messages.map((m,i)=>(
               <div key={i} className={`flex mb-2 ${m.sender==="user"?"justify-end":"justify-start"}`}>
-                <div className={`rounded-lg p-3 max-w-lg ${m.sender==="user"?"bg-green-500 text-white":"bg-gray-300 text-black"}`}>
+                <div className={`rounded-lg p-3 max-w-lg ${m.sender==="user"?"bg-green-500 text-white":darkMode?"bg-gray-700 text-white":"bg-gray-300 text-black"}`}>
                   {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
                   {m.sender === "bot" ? (
                     <div
@@ -252,10 +284,10 @@ function App() {
 
             {/* Chat input: lifted above the bottom nav, rounded container and pill-shaped controls */}
             <div className="fixed left-0 right-0 bottom-24 flex p-4 max-w-4xl mx-auto w-full z-20">
-              <div className="mx-auto flex w-full max-w-4xl bg-white rounded-xl shadow-lg ring-1 ring-gray-200 px-2 py-2 items-center gap-2">
+              <div className={`mx-auto flex w-full max-w-4xl rounded-xl shadow-lg ring-1 px-2 py-2 items-center gap-2 ${darkMode ? 'bg-gray-800 ring-gray-700' : 'bg-white ring-gray-200'}`}>
                 <input 
                   type="text" 
-                  className="flex-1 border-0 outline-none px-4 py-2 rounded-full"
+                  className={`flex-1 border-0 outline-none px-4 py-2 rounded-full ${darkMode ? 'bg-gray-700 text-white placeholder-gray-400' : 'bg-white text-black'}`}
                   value={input} 
                   onChange={e=>setInput(e.target.value)} 
                   onKeyDown={handleKey}
@@ -269,22 +301,22 @@ function App() {
 
         {selectedTab === "settings" && (
           <div className="max-w-xl mx-auto">
-            <h2 className="text-lg font-medium mb-4">Einstellungen</h2>
-            <label className="block mb-2 text-sm text-gray-700">Benutzername</label>
-            <input type="text" placeholder="Benutzername" className="border rounded-lg p-2 w-full mb-4" value={username} onChange={e=>setUsername(e.target.value)} />
-            <label className="block mb-2 text-sm text-gray-700">Passwort</label>
-            <input type="password" placeholder="Passwort" className="border rounded-lg p-2 w-full mb-4" value={password} onChange={e=>setPassword(e.target.value)} />
-            <div className="text-sm text-gray-500">Die Anmeldedaten werden lokal gespeichert und beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, sie werden an keine dritte Partei weitergegeben.</div>
+            <h2 className={`text-lg font-medium mb-4 ${darkMode ? 'text-white' : 'text-black'}`}>Einstellungen</h2>
+            <label className={`block mb-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Benutzername</label>
+            <input type="text" placeholder="Benutzername" className={`border rounded-lg p-2 w-full mb-4 ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-300'}`} value={username} onChange={e=>setUsername(e.target.value)} />
+            <label className={`block mb-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Passwort</label>
+            <input type="password" placeholder="Passwort" className={`border rounded-lg p-2 w-full mb-4 ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-300'}`} value={password} onChange={e=>setPassword(e.target.value)} />
+            <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Die Anmeldedaten werden lokal gespeichert und beim Senden einer Nachricht an das Backend verwendet. Keine Sorge, sie werden an keine dritte Partei weitergegeben.</div>
             <div className="mt-4">
               <button onClick={clearCredentials} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">Anmeldedaten löschen</button>
             </div>
 
             <div className="mt-8">
-              <h3 className="text-md font-medium mb-2">ChatGPT API-Key</h3>
+              <h3 className={`text-md font-medium mb-2 ${darkMode ? 'text-white' : 'text-black'}`}>ChatGPT API-Key</h3>
               <input
                 type="password"
                 placeholder="sk-..."
-                className="border rounded-lg p-2 w-full mb-2"
+                className={`border rounded-lg p-2 w-full mb-2 ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-300'}`}
                 value={apiKeyInput}
                 onChange={e=>setApiKeyInput(e.target.value)}
               />
@@ -292,7 +324,7 @@ function App() {
                 <button onClick={saveApiKey} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg">API-Key speichern</button>
                 <button onClick={clearApiKey} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg">API-Key löschen</button>
               </div>
-              <div className="text-xs text-gray-500 mt-2">Der Key wird nur lokal gespeichert und bei API-Aufrufen mitgeschickt.</div>
+              <div className={`text-xs mt-2 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Der Key wird nur lokal gespeichert und bei API-Aufrufen mitgeschickt.</div>
             </div>
           </div>
         )}
@@ -300,18 +332,18 @@ function App() {
 
       {showApiModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-lg p-5 max-w-sm w-full">
-            <h3 className="text-lg font-medium mb-2">API-Key erforderlich</h3>
-            <p className="text-sm text-gray-600 mb-3">Bitte gib deinen ChatGPT API-Key ein. Er wird nur lokal gespeichert und für die Anfragen genutzt.</p>
+          <div className={`rounded-lg shadow-lg p-5 max-w-sm w-full ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+            <h3 className={`text-lg font-medium mb-2 ${darkMode ? 'text-white' : 'text-black'}`}>API-Key erforderlich</h3>
+            <p className={`text-sm mb-3 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>Bitte gib deinen ChatGPT API-Key ein. Er wird nur lokal gespeichert und für die Anfragen genutzt.</p>
             <input
               type="password"
               placeholder="sk-..."
-              className="border rounded-lg p-2 w-full mb-3"
+              className={`border rounded-lg p-2 w-full mb-3 ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-300'}`}
               value={apiKeyInput}
               onChange={e => setApiKeyInput(e.target.value)}
             />
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowApiModal(false)} className="px-3 py-2 rounded border">Später</button>
+              <button onClick={() => setShowApiModal(false)} className={`px-3 py-2 rounded border ${darkMode ? 'border-gray-600 text-gray-300 hover:bg-gray-700' : 'border-gray-300 hover:bg-gray-50'}`}>Später</button>
               <button onClick={saveApiKey} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded">Speichern</button>
             </div>
           </div>
@@ -319,7 +351,7 @@ function App() {
       )}
 
       {/* Bottom navigation (extracted) */}
-      <BottomNav selectedTab={selectedTab} onSelect={setSelectedTab} />
+      <BottomNav selectedTab={selectedTab} onSelect={setSelectedTab} darkMode={darkMode} />
     </div>
   );
 }
