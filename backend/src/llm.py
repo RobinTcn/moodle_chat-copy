@@ -43,6 +43,7 @@ def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
 
 def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
     """Send Moodle appointments to ChatGPT and return formatted response."""
+    from backend import latestMessage
     try:
         from openai import OpenAI
     except ImportError:
@@ -59,6 +60,9 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
         + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
         + " Unterscheide zwischen endenden und beginnenden Terminen."
         + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
+        + " WICHTIG: Beachte potentielle terminliche oder fachliche Einschränkungen in folgender Nutzereingabe."
+        + "(z.B. Nur Termine für ein bestimmtes Modul oder nur Termine in den nächsten 3 Tagen oder ähnliches. Andere Wünsche in der Nutzeringabe können ignoriert werden)"
+        + "Hier die Nutzereingabe: " + latestMessage
     )
     response = client.chat.completions.create(
         model="gpt-5-mini",
