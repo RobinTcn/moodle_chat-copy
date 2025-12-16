@@ -125,6 +125,8 @@ def download_ics(filename: str):
 @app.post("/chat")
 async def chat(request: ChatRequest):
     global latestMessage
+    latestMessage = request.message
+
     # Use ChatGPT to classify the user's intent. If ChatGPT fails, determine_intent
     # will return 'unknown' and we fall back to a simple keyword check.
     username = request.username

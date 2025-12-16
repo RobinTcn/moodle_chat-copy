@@ -6,6 +6,7 @@ import os
 from typing import Optional
 
 
+
 def pick_api_key(provided: Optional[str]) -> Optional[str]:
     """Pick the API key from provided value or environment."""
     key = (provided or "").strip()
@@ -16,6 +17,7 @@ def pick_api_key(provided: Optional[str]) -> Optional[str]:
 
 
 def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
+    from backend import latestMessage
     """Send exam data to ChatGPT and return formatted response."""
     try:
         from openai import OpenAI
@@ -31,7 +33,7 @@ def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
         model="gpt-5-mini",
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."},
-            {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text}
+            {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen: " +  latestMessage }
         ]
     )
     # Normalize the response text and append the calendar question (same wording used elsewhere)
