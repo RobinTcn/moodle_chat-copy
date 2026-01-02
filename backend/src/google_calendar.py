@@ -204,6 +204,64 @@ def fetch_calendar_events(
         return []
 
 
+def create_calendar_event(access_token: str, event_title: str, event_date: str) -> Optional[Dict]:
+    """
+    Create an event in Google Calendar
+    
+    Args:
+        access_token: Google OAuth access token
+        event_title: Title/description of the event
+        event_date: ISO date string (YYYY-MM-DD)
+    
+    Returns:
+        Created event data or None if failed
+    """
+    try:
+        print(f"\n[Calendar] Creating event in Google Calendar...")
+        print(f"[Calendar] Title: {event_title}")
+        print(f"[Calendar] Date: {event_date}")
+        event_data = {
+            "summary": event_title,
+            "start": {
+                "date": event_date,
+            },
+            "end": {
+                "date": event_date,
+            },
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.post(
+            GOOGLE_CALENDAR_API,
+            headers=headers,
+            json=event_data
+        )
+        
+        print(f"[Calendar] Response status: {response.status_code}")
+        
+        if not response.ok:
+            print(f"[Calendar] Error creating event. Status: {response.status_code}")
+            print(f"[Calendar] Error details: {response.text}")
+            response.raise_for_status()
+        
+        created_event = response.json()
+        print(f"[Calendar] ✓ Event created successfully!")
+        print(f"[Calendar] Event ID: {created_event.get('id')}")
+        print(f"[Calendar] Event URL: {created_event.get('htmlLink')}\n")
+        
+        return created_event
+    
+    except Exception as e:
+        print(f"[Calendar] ✗ Error creating calendar event: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def get_user_info(access_token: str) -> Optional[Dict]:
     """
     Fetch user profile information from Google
@@ -223,4 +281,103 @@ def get_user_info(access_token: str) -> Optional[Dict]:
     
     except Exception as e:
         print(f"Error fetching user info: {e}")
+        return None
+
+
+def delete_calendar_event(access_token: str, event_id: str) -> bool:
+    """
+    Delete an event from Google Calendar
+    
+    Args:
+        access_token: Google OAuth access token
+        event_id: The Google Calendar event ID (without 'google-' prefix)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        print(f"\n[Calendar] Deleting event from Google Calendar...")
+        print(f"[Calendar] Event ID: {event_id}")
+        
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        
+        response = requests.delete(
+            f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+            headers=headers
+        )
+        
+        print(f"[Calendar] Response status: {response.status_code}")
+        
+        if not response.ok:
+            print(f"[Calendar] Error deleting event: {response.text}")
+            response.raise_for_status()
+        
+        print(f"[Calendar] ✓ Event deleted successfully!\n")
+        return True
+    
+    except Exception as e:
+        print(f"[Calendar] ✗ Error deleting calendar event: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def update_calendar_event(access_token: str, event_id: str, event_title: str, event_date: str) -> Optional[Dict]:
+    """
+    Update an event in Google Calendar
+    
+    Args:
+        access_token: Google OAuth access token
+        event_id: The Google Calendar event ID (without 'google-' prefix)
+        event_title: New title/description of the event
+        event_date: New ISO date string (YYYY-MM-DD)
+    
+    Returns:
+        Updated event data or None if failed
+    """
+    try:
+        print(f"\n[Calendar] Updating event in Google Calendar...")
+        print(f"[Calendar] Event ID: {event_id}")
+        print(f"[Calendar] Title: {event_title}")
+        print(f"[Calendar] Date: {event_date}")
+        
+        event_data = {
+            "summary": event_title,
+            "start": {
+                "date": event_date,
+            },
+            "end": {
+                "date": event_date,
+            },
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.patch(
+            f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+            headers=headers,
+            json=event_data
+        )
+        
+        print(f"[Calendar] Response status: {response.status_code}")
+        
+        if not response.ok:
+            print(f"[Calendar] Error updating event: {response.text}")
+            response.raise_for_status()
+        
+        updated_event = response.json()
+        print(f"[Calendar] ✓ Event updated successfully!")
+        print(f"[Calendar] Event ID: {updated_event.get('id')}\n")
+        
+        return updated_event
+    
+    except Exception as e:
+        print(f"[Calendar] ✗ Error updating calendar event: {e}")
+        import traceback
+        traceback.print_exc()
         return None

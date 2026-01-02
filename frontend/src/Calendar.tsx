@@ -141,16 +141,27 @@ function CalendarContent() {
 	const [addModalDay, setAddModalDay] = useState<string | null>(null);
 	const [addModalText, setAddModalText] = useState<string>("");
 
+	// edit-event modal state
+	const [editingEventId, setEditingEventId] = useState<string | null>(null);
+	const [editingEventText, setEditingEventText] = useState<string>("");
+
 	// expose global helper so other parts of the app (e.g. chatbot handlers) can add events
 	useEffect(() => {
 		// define a function on window
 		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 		// @ts-ignore
 		window.addCalendarEvent = (dateISO: string, text: string) => {
-			const ev: CalendarEvent = { id: String(Date.now()) + Math.random().toString(36).slice(2), date: dateISO, text };
-			const next = [...loadEvents(), ev];
-			saveEvents(next);
-			setEvents(next);
+			// If user is logged in with Google, send to Google Calendar only
+			if (user && accessToken) {
+				console.log('User is logged in with Google, syncing event from chatbot to Google Calendar only');
+				syncEventToGoogleCalendar(text, dateISO, accessToken);
+			} else {
+				// If not logged in, save locally only
+				const ev: CalendarEvent = { id: String(Date.now()) + Math.random().toString(36).slice(2), date: dateISO, text };
+				const next = [...loadEvents(), ev];
+				saveEvents(next);
+				setEvents(next);
+			}
 		};
 
 		return () => {
@@ -158,25 +169,178 @@ function CalendarContent() {
 			// @ts-ignore
 			delete window.addCalendarEvent;
 		};
-	}, []);
+	}, [user, accessToken]);
 
 	// helper to add an event from UI
 	const addEvent = (dateISO: string, text: string) => {
-		const ev: CalendarEvent = { id: String(Date.now()) + Math.random().toString(36).slice(2), date: dateISO, text };
-		const next = [...events, ev];
-		saveEvents(next);
-		setEvents(next);
+		// If user is logged in with Google, send to Google Calendar only
+		if (user && accessToken) {
+			console.log('User is logged in with Google, syncing event to Google Calendar only');
+			syncEventToGoogleCalendar(text, dateISO, accessToken);
+		} else {
+			// If not logged in, save locally only
+			const ev: CalendarEvent = { id: String(Date.now()) + Math.random().toString(36).slice(2), date: dateISO, text };
+			const next = [...events, ev];
+			saveEvents(next);
+			setEvents(next);
+		}
+	};
+
+	const syncEventToGoogleCalendar = async (title: string, date: string, token: string) => {
+		try {
+			console.log('Syncing event to Google Calendar:', title, date);
+			const response = await fetch(`${BACKEND_URL}/api/google/calendar/create`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					access_token: token,
+					title: title,
+					date: date,
+				}),
+			});
+
+			const data = await response.json();
+			
+			if (!response.ok) {
+				console.error('Backend error response:', response.status, data);
+				throw new Error(data.message || 'Failed to sync event to Google Calendar');
+			}
+			
+			if (data.success) {
+				console.log('✓ Event synced to Google Calendar:', data.event_id);
+				// Add the Google event to our display
+				setGoogleEvents(prev => [...prev, data.event]);
+			} else {
+				console.error('Failed to sync:', data.message);
+			}
+		} catch (e) {
+			console.error('Error syncing event to Google Calendar:', e);
+			// Don't fail the local save, just warn the user
+			console.warn('Event saved locally but could not sync to Google Calendar');
+		}
 	};
 
 	const removeEvent = (id: string) => {
-		// Only allow removing local events, not Google Calendar events
+		// If it's a Google Calendar event
 		if (id.startsWith('google-')) {
-			alert('Google Calendar-Ereignisse können nicht hier gelöscht werden. Bitte verwenden Sie Google Calendar.');
-			return;
+			if (!accessToken || !user) {
+				alert('Du musst mit Google angemeldet sein, um Google Calendar-Events zu löschen.');
+				return;
+			}
+			deleteGoogleEvent(id);
+		} else {
+			// Local event
+			const next = events.filter(e => e.id !== id);
+			saveEvents(next);
+			setEvents(next);
 		}
-		const next = events.filter(e => e.id !== id);
-		saveEvents(next);
-		setEvents(next);
+	};
+
+	const deleteGoogleEvent = async (eventId: string) => {
+		try {
+			console.log('Deleting Google Calendar event:', eventId);
+			const response = await fetch(`${BACKEND_URL}/api/google/calendar/delete`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					access_token: accessToken,
+					event_id: eventId,
+				}),
+			});
+
+			const data = await response.json();
+			
+			if (!response.ok) {
+				console.error('Backend error response:', response.status, data);
+				alert('Fehler beim Löschen des Events: ' + (data.message || 'Unbekannter Fehler'));
+				return;
+			}
+			
+			if (data.success) {
+				console.log('✓ Google event deleted:', eventId);
+				// Remove from googleEvents state
+				setGoogleEvents(prev => prev.filter(e => e.id !== eventId));
+			} else {
+				alert('Fehler beim Löschen des Events: ' + data.message);
+			}
+		} catch (e) {
+			console.error('Error deleting Google event:', e);
+			alert('Fehler beim Löschen des Events');
+		}
+	};
+
+	const startEditEvent = (event: CalendarEvent) => {
+		setEditingEventId(event.id);
+		setEditingEventText(event.text);
+	};
+
+	const saveEditEvent = async () => {
+		if (!editingEventId || !editingEventText.trim()) return;
+
+		// If it's a Google Calendar event
+		if (editingEventId.startsWith('google-')) {
+			if (!accessToken || !user) {
+				alert('Du musst mit Google angemeldet sein, um Google Calendar-Events zu bearbeiten.');
+				return;
+			}
+			
+			// Find the event to get its date
+			const event = googleEvents.find(e => e.id === editingEventId);
+			if (!event) return;
+
+			try {
+				console.log('Updating Google Calendar event:', editingEventId);
+				const response = await fetch(`${BACKEND_URL}/api/google/calendar/update`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						access_token: accessToken,
+						event_id: editingEventId,
+						title: editingEventText,
+						date: event.date,
+					}),
+				});
+
+				const data = await response.json();
+				
+				if (!response.ok) {
+					console.error('Backend error response:', response.status, data);
+					alert('Fehler beim Aktualisieren des Events: ' + (data.message || 'Unbekannter Fehler'));
+					return;
+				}
+				
+				if (data.success) {
+					console.log('✓ Google event updated:', editingEventId);
+					// Update googleEvents state
+					setGoogleEvents(prev => prev.map(e => 
+						e.id === editingEventId 
+							? { ...e, text: editingEventText } 
+							: e
+					));
+				}
+			} catch (e) {
+				console.error('Error updating Google event:', e);
+				alert('Fehler beim Aktualisieren des Events');
+			}
+		} else {
+			// Local event
+			const next = events.map(e => 
+				e.id === editingEventId 
+					? { ...e, text: editingEventText } 
+					: e
+			);
+			saveEvents(next);
+			setEvents(next);
+		}
+
+		setEditingEventId(null);
+		setEditingEventText("");
 	};
 
 	const handleGoogleSuccess = async (codeResponse: any) => {
@@ -330,7 +494,7 @@ function CalendarContent() {
 	const login = useGoogleLogin({
 		onSuccess: handleGoogleSuccess,
 		onError: (error) => console.error('Login Failed:', error),
-		scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
+		scope: 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
 		flow: 'auth-code', // Use authorization code flow for backend exchange
 	});
 
@@ -509,18 +673,27 @@ function CalendarContent() {
 							<div className="space-y-2 max-h-56 overflow-auto">
 								{(eventsByDate[openDay] || []).map(e => (
 									<div key={e.id} className="flex items-start justify-between gap-2 p-2 border rounded">
-										<div className="flex items-center gap-2 flex-1">
+										<div className="flex items-center gap-2 flex-1 min-w-0">
 											{e.source === 'google' && (
 												<span className="text-blue-500 text-sm" title="Google Calendar">📅</span>
 											)}
-											<span>{e.text}</span>
+											<span className="truncate">{e.text}</span>
 										</div>
-										<div className="flex flex-col gap-1">
-											{e.source !== 'google' ? (
-												<button onClick={() => { removeEvent(e.id); }} className="text-sm text-red-500">Löschen</button>
-											) : (
-												<span className="text-xs text-gray-400">Google</span>
-											)}
+										<div className="flex gap-1 flex-shrink-0">
+											<button 
+												onClick={() => startEditEvent(e)} 
+												className="text-sm text-blue-500 hover:text-blue-700"
+												title="Bearbeiten"
+											>
+												✏️
+											</button>
+											<button 
+												onClick={() => removeEvent(e.id)} 
+												className="text-sm text-red-500 hover:text-red-700"
+												title="Löschen"
+											>
+												✕
+											</button>
 										</div>
 									</div>
 								))}
@@ -563,6 +736,36 @@ function CalendarContent() {
 								setAddModalText("");
 							}}
 							className="bg-green-500 text-white px-3 py-1 rounded"
+							>
+								Speichern
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* Edit-event modal */}
+			{editingEventId && (
+				<div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-50">
+					<div className="bg-white rounded-lg max-w-md w-full p-4">
+						<div className="flex items-center justify-between mb-2">
+							<div className="font-medium">Eintrag bearbeiten</div>
+							<button onClick={() => { setEditingEventId(null); setEditingEventText(""); }} className="text-gray-500">Abbrechen</button>
+						</div>
+						<div>
+							<textarea
+								value={editingEventText}
+								onChange={(e) => setEditingEventText(e.target.value)}
+								rows={4}
+								className="w-full border rounded p-2"
+								placeholder="Beschreibung eingeben..."
+							/>
+						</div>
+						<div className="mt-3 flex justify-end gap-2">
+							<button onClick={() => { setEditingEventId(null); setEditingEventText(""); }} className="px-3 py-1 rounded border">Abbrechen</button>
+							<button
+								onClick={() => saveEditEvent()}
+								className="bg-blue-500 text-white px-3 py-1 rounded"
 							>
 								Speichern
 							</button>

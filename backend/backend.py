@@ -22,7 +22,10 @@ from src.google_calendar import (
     exchange_code_for_token,
     fetch_calendar_events,
     get_user_info,
-    refresh_access_token
+    refresh_access_token,
+    create_calendar_event,
+    delete_calendar_event,
+    update_calendar_event
 )
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
@@ -414,6 +417,122 @@ async def refresh_token_endpoint(data: dict):
         "access_token": token_data.get("access_token"),
         "expires_in": token_data.get("expires_in"),
     }
+
+
+@app.post("/api/google/calendar/create")
+async def create_calendar_event_endpoint(data: dict):
+    """
+    Create an event in Google Calendar
+    """
+    logging.info("Create calendar event endpoint called")
+    logging.info(f"Received data: {data}")
+    
+    access_token = data.get("access_token")
+    event_title = data.get("title")
+    event_date = data.get("date")
+    
+    logging.info(f"access_token present: {bool(access_token)}")
+    logging.info(f"title: {event_title}")
+    logging.info(f"date: {event_date}")
+    
+    if not access_token or not event_title or not event_date:
+        logging.error(f"Missing required fields. access_token: {bool(access_token)}, title: {bool(event_title)}, date: {bool(event_date)}")
+        return {"success": False, "message": "Missing access_token, title, or date"}
+    
+    logging.info(f"Creating event: {event_title} on {event_date}")
+    created_event = create_calendar_event(access_token, event_title, event_date)
+    
+    if not created_event:
+        logging.error("Failed to create calendar event")
+        return {"success": False, "message": "Failed to create event in Google Calendar"}
+    
+    logging.info(f"Event created successfully: {created_event.get('id')}")
+    
+    return {
+        "success": True,
+        "event_id": created_event.get("id"),
+        "event": {
+            "id": f"google-{created_event.get('id')}",
+            "date": event_date,
+            "text": event_title,
+            "source": "google"
+        }
+    }
+
+
+@app.post("/api/google/calendar/delete")
+async def delete_calendar_event_endpoint(data: dict):
+    """
+    Delete an event from Google Calendar
+    """
+    logging.info("Delete calendar event endpoint called")
+    
+    access_token = data.get("access_token")
+    event_id = data.get("event_id")
+    
+    if not access_token or not event_id:
+        logging.error(f"Missing required fields. access_token: {bool(access_token)}, event_id: {bool(event_id)}")
+        return {"success": False, "message": "Missing access_token or event_id"}
+    
+    # Remove 'google-' prefix if present
+    if event_id.startswith("google-"):
+        event_id = event_id[7:]
+    
+    logging.info(f"Deleting event: {event_id}")
+    success = delete_calendar_event(access_token, event_id)
+    
+    if not success:
+        logging.error("Failed to delete calendar event")
+        return {"success": False, "message": "Failed to delete event from Google Calendar"}
+    
+    logging.info(f"Event deleted successfully: {event_id}")
+    
+    return {
+        "success": True,
+        "message": "Event deleted successfully"
+    }
+
+
+@app.post("/api/google/calendar/update")
+async def update_calendar_event_endpoint(data: dict):
+    """
+    Update an event in Google Calendar
+    """
+    logging.info("Update calendar event endpoint called")
+    
+    access_token = data.get("access_token")
+    event_id = data.get("event_id")
+    event_title = data.get("title")
+    event_date = data.get("date")
+    
+    if not access_token or not event_id or not event_title or not event_date:
+        logging.error(f"Missing required fields. access_token: {bool(access_token)}, event_id: {bool(event_id)}, title: {bool(event_title)}, date: {bool(event_date)}")
+        return {"success": False, "message": "Missing access_token, event_id, title, or date"}
+    
+    # Remove 'google-' prefix if present
+    if event_id.startswith("google-"):
+        event_id = event_id[7:]
+    
+    logging.info(f"Updating event: {event_id}")
+    updated_event = update_calendar_event(access_token, event_id, event_title, event_date)
+    
+    if not updated_event:
+        logging.error("Failed to update calendar event")
+        return {"success": False, "message": "Failed to update event in Google Calendar"}
+    
+    logging.info(f"Event updated successfully: {event_id}")
+    
+    return {
+        "success": True,
+        "event_id": updated_event.get("id"),
+        "event": {
+            "id": f"google-{updated_event.get('id')}",
+            "date": event_date,
+            "text": event_title,
+            "source": "google"
+        }
+    }
+
 
 
 @app.get("/", response_class=HTMLResponse)
