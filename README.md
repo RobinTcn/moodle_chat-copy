@@ -18,13 +18,6 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 FRONTEND_URL=http://localhost:5173
 ```
 
-**How to get Google credentials:**
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create a new OAuth 2.0 Client ID (Web application)
-3. Add `http://localhost:5173` to the **Authorized redirect URIs**
-4. Enable the **Google Calendar API** in your project
-5. Copy the Client ID and Client Secret into the `.env` file
-
 ### Frontend (.env in `\frontend\`)
 Create a `.env` file in the `\frontend\` directory:
 
@@ -66,12 +59,3 @@ npm run dev
 ```
 
 This will produce a localhost link (typically `http://localhost:5173`) which you can click on.
-
-## 4 Features
-
-### Google Calendar Integration
-- **Login**: Click "Mit Google anmelden" to authenticate with your Google account
-- **View Events**: Your Google Calendar events appear with a 📅 emoji
-- **Add Local Events**: Add events that only exist in this app
-- **Sync**: Events sync automatically when you change months or refresh the browser
-- **Delete**: Only local events can be deleted in this app; use Google Calendar to manage Google events
