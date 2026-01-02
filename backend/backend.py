@@ -92,7 +92,7 @@ def get_cached_scraped_data(username: str, data_type: str):
         data_type: Type of data ('moodle' or 'stine_exams')
     
     Returns:
-        Cached scraped data string or None if cache miss/expired
+        Tuple of (raw_data, chatgpt_response) or (None, None) if cache miss/expired
     """
     cache_key = (username, data_type)
     
@@ -102,26 +102,31 @@ def get_cached_scraped_data(username: str, data_type: str):
             # Check if cache is still valid
             if time.time() - cached.get('ts', 0) < CACHE_EXPIRY_SECONDS:
                 logging.info(f"Cache hit for {data_type} scraped data (user: {username})")
-                return cached['data']
+                return cached.get('raw_data'), cached.get('chatgpt_response')
             else:
                 # Cache expired, remove it
                 logging.info(f"Cache expired for {data_type} scraped data (user: {username})")
                 del scraper_cache[cache_key]
     
-    return None
+    return None, None
 
 
-def cache_scraped_data(username: str, data_type: str, data: str):
-    """Store scraped data in cache.
+def cache_scraped_data(username: str, data_type: str, raw_data: str, chatgpt_response: str = None):
+    """Store scraped data and optional ChatGPT response in cache.
     
     Args:
         username: User identifier
         data_type: Type of data ('moodle' or 'stine_exams')
-        data: Scraped data to cache
+        raw_data: Raw scraped data to cache
+        chatgpt_response: Optional ChatGPT formatted response
     """
     cache_key = (username, data_type)
     with cache_lock:
-        scraper_cache[cache_key] = {'data': data, 'ts': time.time()}
+        scraper_cache[cache_key] = {
+            'raw_data': raw_data,
+            'chatgpt_response': chatgpt_response,
+            'ts': time.time()
+        }
     logging.info(f"Cached {data_type} scraped data (user: {username})")
 
 
@@ -216,11 +221,12 @@ async def chat(request: ChatRequest):
     if intent == "get_moodle_appointments":
         logging.info("[Chat] Processing Moodle appointments request")
         try:
-            # Check cache first for scraped data
-            cached_data = get_cached_scraped_data(username, 'moodle')
-            if cached_data:
-                logging.info("[Chat] Using cached Moodle data")
+            # Check cache first for scraped data AND ChatGPT response
+            cached_data, cached_response = get_cached_scraped_data(username, 'moodle')
+            if cached_data and cached_response:
+                logging.info("[Chat] Using cached Moodle data and response")
                 termine = cached_data
+                response = cached_response
             else:
                 # Cache miss - scrape and cache the data
                 logging.info("[Chat] Cache miss - starting Moodle scraper")
@@ -233,11 +239,13 @@ async def chat(request: ChatRequest):
                     logging.warning(f"[Chat] Scraper returned error: {termine[:100]}")
                     return {"response": "Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
                 
-                cache_scraped_data(username, 'moodle', termine)
-            
-            # Always ask ChatGPT to format the data
-            logging.info("[Chat] Asking ChatGPT to format Moodle data")
-            response = ask_chatgpt_moodle(termine, api_key)
+                # Ask ChatGPT to format the data
+                logging.info("[Chat] Asking ChatGPT to format Moodle data")
+                response = ask_chatgpt_moodle(termine, api_key)
+                logging.info(f"[Chat] ChatGPT response length: {len(response)}")
+                
+                # Cache both raw data and ChatGPT response
+                cache_scraped_data(username, 'moodle', termine, response)
             logging.info(f"[Chat] ChatGPT response length: {len(response)}")
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
@@ -255,10 +263,12 @@ async def chat(request: ChatRequest):
         return {"response": "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."}
     elif intent == "get_stine_exams":
         try:
-            # Check cache first for scraped data
-            cached_data = get_cached_scraped_data(username, 'stine_exams')
-            if cached_data:
+            # Check cache first for scraped data AND ChatGPT response
+            cached_data, cached_response = get_cached_scraped_data(username, 'stine_exams')
+            if cached_data and cached_response:
+                logging.info("[Chat] Using cached STINE data and response")
                 exams_text = cached_data
+                response = cached_response
             else:
                 # Cache miss - scrape and cache the data
                 exams_text = scrape_stine_exams(request.username, request.password)
@@ -268,10 +278,11 @@ async def chat(request: ChatRequest):
                     logging.warning(f"[Chat] STINE scraper returned error: {exams_text[:100]}")
                     return {"response": "STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
                 
-                cache_scraped_data(username, 'stine_exams', exams_text)
-            
-            # Always ask ChatGPT to format the data
-            response = ask_chatgpt_exams(exams_text, api_key)
+                # Ask ChatGPT to format the data
+                response = ask_chatgpt_exams(exams_text, api_key)
+                
+                # Cache both raw data and ChatGPT response
+                cache_scraped_data(username, 'stine_exams', exams_text, response)
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
