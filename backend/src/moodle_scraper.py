@@ -10,6 +10,9 @@ TARGET = "https://lernen.min.uni-hamburg.de/my/"
 
 def scrape_moodle_text(username: str, password: str, headless: bool = True, max_wait: int = 25) -> str:
     """Scrape current appointments/tasks from Moodle."""
+    logging.info(f"[Scraper] Starting Moodle scrape for user: {username}")
+    logging.info(f"[Scraper] Headless mode: {headless}, Max wait: {max_wait}")
+    
     # Import heavy/optional deps here so the app can still start without them.
     try:
         from selenium import webdriver
@@ -21,6 +24,7 @@ def scrape_moodle_text(username: str, password: str, headless: bool = True, max_
         from bs4 import BeautifulSoup
     except Exception as e:
         # Return a clear message the frontend can display instead of crashing.
+        logging.error(f"[Scraper] Failed to import dependencies: {e}")
         return f"Selenium/bs4 nicht verfügbar: {e}. Installiere 'selenium' und 'beautifulsoup4' und einen passenden ChromeDriver, oder starte den Server mit den Abhängigkeiten." 
 
     options = Options()
@@ -28,16 +32,20 @@ def scrape_moodle_text(username: str, password: str, headless: bool = True, max_
         # older/newer chrome headless flags differ; this should be broadly compatible
         options.add_argument("--headless")
     try:
+        logging.info("[Scraper] Initializing Chrome WebDriver")
         driver = webdriver.Chrome(options=options)
     except Exception as e:
+        logging.error(f"[Scraper] Chrome WebDriver error: {e}")
         return f"Chrome WebDriver nicht gefunden oder konnte nicht gestartet werden: {e}"
 
     wait = WebDriverWait(driver, max_wait)
     try:
+        logging.info(f"[Scraper] Navigating to {TARGET}")
         driver.get(TARGET)
 
         # Login Button - try to click, but handle overlays/cookie popups that may intercept clicks
         try:
+            logging.info("[Scraper] Waiting for login button")
             login_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Login') or contains(., 'Anmelden')]") ))
 
             # Helper: attempt several click strategies to avoid ElementClickInterceptedException
@@ -82,14 +90,18 @@ def scrape_moodle_text(username: str, password: str, headless: bool = True, max_
             pass
 
         # Username/Passwort
+        logging.info("[Scraper] Waiting for username field")
         user_field = wait.until(EC.presence_of_element_located((By.NAME, "j_username")))
         pass_field = wait.until(EC.presence_of_element_located((By.NAME, "j_password")))
+        logging.info("[Scraper] Filling in credentials")
         user_field.send_keys(username)
         pass_field.send_keys(password)
         submit_btn = driver.find_element(By.XPATH, "//button[@name='_eventId_proceed' or contains(., 'Anmelden')]")
+        logging.info("[Scraper] Submitting login form")
         submit_btn.click()
 
         # 2FA (FIDO)
+        logging.info("[Scraper] Waiting for 2FA prompt")
         try:
             fido_radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='2fa_method' and @value='fido']")))
             driver.execute_script("arguments[0].click();", fido_radio)

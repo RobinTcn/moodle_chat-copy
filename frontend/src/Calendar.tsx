@@ -151,6 +151,15 @@ function CalendarContent() {
 		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 		// @ts-ignore
 		window.addCalendarEvent = (dateISO: string, text: string) => {
+			// Check for duplicates: same date AND same title in both local and Google events
+			const allEvents = [...events, ...googleEvents];
+			const isDuplicate = allEvents.some(ev => ev.date === dateISO && ev.text === text);
+			
+			if (isDuplicate) {
+				alert('Dieser Termin existiert bereits in deinem Kalender!');
+				return;
+			}
+			
 			// If user is logged in with Google, send to Google Calendar only
 			if (user && accessToken) {
 				console.log('User is logged in with Google, syncing event from chatbot to Google Calendar only');
@@ -162,6 +171,8 @@ function CalendarContent() {
 				saveEvents(next);
 				setEvents(next);
 			}
+			
+			alert('Termin hinzugefügt!');
 		};
 
 		return () => {
@@ -169,7 +180,7 @@ function CalendarContent() {
 			// @ts-ignore
 			delete window.addCalendarEvent;
 		};
-	}, [user, accessToken]);
+	}, [user, accessToken, events, googleEvents]);
 
 	// helper to add an event from UI
 	const addEvent = (dateISO: string, text: string) => {

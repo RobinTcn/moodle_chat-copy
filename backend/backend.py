@@ -16,7 +16,7 @@ from src.credentials import save_credentials, load_credentials, delete_credentia
 from src.moodle_scraper import scrape_moodle_text
 from src.stine_exam_scraper import scrape_stine_exams
 from src.llm import ask_chatgpt_moodle, ask_chatgpt_exams, determine_intent, pick_api_key
-from src.ics_calendar import make_calendar_entries
+from src.ics_calendar import make_calendar_entries, extract_events_from_ics
 from src.utils import resolve_frontend_dist
 from src.google_calendar import (
     exchange_code_for_token,
@@ -36,6 +36,15 @@ try:
 except Exception:
     # If python-dotenv isn't installed, that's okay — environment variables may be set elsewhere.
     pass
+
+# Configure logging to show INFO and above messages in console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Output to console/terminal
+    ]
+)
 
 # Note: selenium and bs4 imports are moved into the scraping function so the
 # FastAPI app can start even when Selenium/chromedriver aren't installed.
@@ -198,27 +207,46 @@ async def chat(request: ChatRequest):
         if not (state and state.get('awaiting_calendar')):
             # Treat as unknown so normal routing/keyword checks apply.
             intent = "unknown"
+    
+    logging.info(f"[Chat] Detected intent: {intent}")
+    logging.info(f"[Chat] Username: {username}")
+    logging.info(f"[Chat] Has password: {bool(request.password)}")
+    
     # Route based on detected intent
     if intent == "get_moodle_appointments":
+        logging.info("[Chat] Processing Moodle appointments request")
         try:
             # Check cache first for scraped data
             cached_data = get_cached_scraped_data(username, 'moodle')
             if cached_data:
+                logging.info("[Chat] Using cached Moodle data")
                 termine = cached_data
             else:
                 # Cache miss - scrape and cache the data
+                logging.info("[Chat] Cache miss - starting Moodle scraper")
+                logging.info(f"[Chat] Username for scraper: {request.username}")
                 termine = scrape_moodle_text(request.username, request.password)
+                logging.info(f"[Chat] Scraper returned {len(termine)} characters")
+                
+                # Check if scraper returned an error
+                if any(error_keyword in termine for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
+                    logging.warning(f"[Chat] Scraper returned error: {termine[:100]}")
+                    return {"response": "Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
+                
                 cache_scraped_data(username, 'moodle', termine)
             
             # Always ask ChatGPT to format the data
+            logging.info("[Chat] Asking ChatGPT to format Moodle data")
             response = ask_chatgpt_moodle(termine, api_key)
+            logging.info(f"[Chat] ChatGPT response length: {len(response)}")
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
-                latestMessage = response
                 with state_lock:
-                    conversation_state[username] = { 'awaiting_calendar': True, 'ts': time.time() }
+                    # IMPORTANT: Store RAW scraper data, not formatted response
+                    conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': termine, 'ts': time.time() }
+                logging.info("[Chat] Calendar option offered - raw data stored in state")
             return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
@@ -234,6 +262,12 @@ async def chat(request: ChatRequest):
             else:
                 # Cache miss - scrape and cache the data
                 exams_text = scrape_stine_exams(request.username, request.password)
+                
+                # Check if scraper returned an error
+                if any(error_keyword in exams_text for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
+                    logging.warning(f"[Chat] STINE scraper returned error: {exams_text[:100]}")
+                    return {"response": "STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
+                
                 cache_scraped_data(username, 'stine_exams', exams_text)
             
             # Always ask ChatGPT to format the data
@@ -242,9 +276,10 @@ async def chat(request: ChatRequest):
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
             if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
-                latestMessage = response
                 with state_lock:
-                    conversation_state[username] = { 'awaiting_calendar': True, 'ts': time.time() }
+                    # IMPORTANT: Store RAW scraper data, not formatted response
+                    conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': exams_text, 'ts': time.time() }
+                logging.info("[Chat] Calendar option offered for STINE exams - raw data stored in state")
             return {"response": response}
         except Exception as e:
             response = f"Fehler beim Abrufen der Stine-Prüfungen: {e}"
@@ -257,18 +292,33 @@ async def chat(request: ChatRequest):
         return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
     elif intent == "calendar_yes":
         # proceed to create calendar entries
+        termine = None
         with state_lock:
             if username in conversation_state:
+                state = conversation_state[username]
+                # Get the RAW data (not formatted response)
+                termine = state.get('raw_termine', '')
                 del conversation_state[username]
+        
+        if not termine:
+            logging.error("[Chat] Calendar YES: No raw data found in state")
+            return {"response": "Fehler: Keine Termine verfügbar. Bitte erneut anfragen."}
+        
         try:
-            termine = latestMessage
-            saved_basename, ics_content = make_calendar_entries(termine, api_key)
-            resp = {"response": "Hier sind die Kalender-Einträge im ICS-Format:", "ics": ics_content}
-            if saved_basename:
-                resp["ics_filename"] = saved_basename
+            logging.info(f"[Chat] Calendar YES - using raw data ({len(termine)} chars)")
+            _, ics_content = make_calendar_entries(termine, api_key)
+            
+            # Extract events from ICS for suggested_events
+            suggested_events = extract_events_from_ics(ics_content)
+            
+            logging.info(f"[Chat] Calendar YES - extracted {len(suggested_events)} events")
+            
+            # Return only the suggested events as buttons, no ICS file download
+            resp = {"suggested_events": suggested_events}
             return resp
         except Exception as e:
             response = f"Fehler beim Erstellen der Kalender-Einträge: {e}"
+            logging.error(f"[Chat] Calendar entry creation failed: {e}")
             return {"response": response}
     elif intent == "calendar_no":
         # clear awaiting flag for this user

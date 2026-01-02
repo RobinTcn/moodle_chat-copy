@@ -208,16 +208,25 @@ function App() {
         api_key: apiKey
       });
       // Replace the typing indicator (last message) with the real response
-      setMessages(prev => {
-        const withoutTyping = prev.slice(0, -1); // drop last (typing)
-        return [...withoutTyping, { sender: "bot", text: res.data.response }];
-      });
+      // Only add response message if response text is provided
+      if (res.data && res.data.response) {
+        setMessages(prev => {
+          const withoutTyping = prev.slice(0, -1); // drop last (typing)
+          return [...withoutTyping, { sender: "bot", text: res.data.response }];
+        });
+      } else {
+        // Remove typing indicator if no response text
+        setMessages(prev => prev.slice(0, -1));
+      }
 
-      // If the backend returned an ICS filename, append a download button message
-      if (res.data && res.data.ics_filename) {
-        const url = `${backendBase}/download_ics/${encodeURIComponent(res.data.ics_filename)}`;
-        const btnHtml = `<div style="margin-top:6px"><a href="${url}" download class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">Kalender herunterladen (.ics)</a></div>`;
-        setMessages(prev => [...prev, { sender: "bot", text: btnHtml }]);
+      // If the backend returned suggested events, append them as clickable buttons
+      if (res.data && res.data.suggested_events && res.data.suggested_events.length > 0) {
+        const eventsHtml = res.data.suggested_events.map(evt => {
+          const dateStr = new Date(evt.date).toLocaleDateString('de-DE', { year: 'numeric', month: 'long', day: 'numeric' });
+          return `<div style="display:inline-block; margin:4px 4px 4px 0; padding:8px 12px; background:#4CAF50; color:white; border-radius:4px; cursor:pointer;" onclick="window.addCalendarEvent('${evt.date}', '${evt.title.replace(/'/g, "\\'")}')" title="Zum Kalender hinzufügen">${evt.title} (${dateStr})</div>`;
+        }).join('');
+        const suggestedHtml = `<div style="margin-top:8px"><strong>Welche Termine soll ich zum Kalender hinzufügen?</strong><div style="margin-top:6px">${eventsHtml}</div></div>`;
+        setMessages(prev => [...prev, { sender: "bot", text: suggestedHtml }]);
       }
     } catch {
       setMessages(prev => {
@@ -256,11 +265,10 @@ function App() {
 
       {/* Main content area. We add bottom padding so the bottom nav and chat input don't overlap content. */}
       <div className="flex-1 overflow-y-auto p-4 pb-56">
-        {selectedTab === "calendar" && (
-          <div className="h-full">
-            <Calendar />
-          </div>
-        )}
+        {/* Always render Calendar to keep window.addCalendarEvent available, but hide when not selected */}
+        <div className={`h-full ${selectedTab === "calendar" ? "" : "hidden"}`}>
+          <Calendar />
+        </div>
 
         {selectedTab === "chat" && (
           <div>

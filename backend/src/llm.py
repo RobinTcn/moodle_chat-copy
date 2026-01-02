@@ -32,7 +32,7 @@ def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
     response = client.chat.completions.create(
         model="gpt-5-mini",
         messages=[
-            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst."},
+            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst und keine Rückfragen stellt."},
             {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen: " +  latestMessage }
         ]
     )
@@ -67,7 +67,7 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
     response = client.chat.completions.create(
         model="gpt-5-mini",
         messages=[
-            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst."},
+            {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Moodle-Aufgaben für den Benutzer zusammenfasst und keine Rückfragen stellt."},
             {"role": "user", "content": user_message}
         ]
     )
