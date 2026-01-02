@@ -182,6 +182,137 @@ function CalendarContent() {
 		};
 	}, [user, accessToken, events, googleEvents]);
 
+	// Notification system: Check for upcoming deadlines
+	useEffect(() => {
+		// Request notification permission on mount
+		if ('Notification' in window && Notification.permission === 'default') {
+			Notification.requestPermission().then(permission => {
+				console.log('Notification permission:', permission);
+			});
+		}
+
+		// Check for reminders every hour
+		const checkReminders = () => {
+			console.log('[Reminder Check] Starting reminder check...');
+			
+			// Only check if we have notification permission
+			if (!('Notification' in window) || Notification.permission !== 'granted') {
+				console.log('[Reminder Check] No notification permission');
+				return;
+			}
+
+			// Load reminder settings
+			let settings;
+			try {
+				const stored = localStorage.getItem('reminder_settings');
+				if (!stored) {
+					console.log('[Reminder Check] No settings configured yet');
+					return;
+				}
+				settings = JSON.parse(stored);
+				console.log('[Reminder Check] Settings loaded:', settings);
+			} catch (e) {
+				console.error('[Reminder Check] Failed to load reminder settings:', e);
+				return;
+			}
+
+			const taskDays = settings.reminder_days_tasks || 1;
+			const examDays = settings.reminder_days_exams || 7;
+			console.log(`[Reminder Check] Task days: ${taskDays}, Exam days: ${examDays}`);
+
+			// Get all events (local + Google)
+			const allEvents = [...events, ...googleEvents];
+			console.log(`[Reminder Check] Found ${allEvents.length} events total`);
+			const today = new Date();
+			today.setHours(0, 0, 0, 0);
+			console.log(`[Reminder Check] Today is: ${today.toISOString()}`);
+
+			// Track which reminders we've already shown (stored in localStorage)
+			let shownReminders: string[] = [];
+			try {
+				const stored = localStorage.getItem('shown_reminders');
+				if (stored) shownReminders = JSON.parse(stored);
+			} catch (e) {
+				// ignore
+			}
+
+			allEvents.forEach(ev => {
+				console.log(`[Reminder Check] Checking event: "${ev.text}" on ${ev.date}`);
+				const eventDate = new Date(ev.date);
+				eventDate.setHours(0, 0, 0, 0);
+				
+				const diffTime = eventDate.getTime() - today.getTime();
+				const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+				console.log(`[Reminder Check] Days until event: ${diffDays}`);
+
+				// Skip if event is in the past
+				if (diffDays < 0) {
+					console.log(`[Reminder Check] Event is in the past, skipping`);
+					return;
+				}
+
+				// Determine if it's an exam (contains keywords) or task
+				const isExam = /klausur|prüfung|exam|test/i.test(ev.text);
+				const reminderDays = isExam ? examDays : taskDays;
+				console.log(`[Reminder Check] Is exam: ${isExam}, Reminder days: ${reminderDays}`);
+
+				// Check if we should remind today
+				if (diffDays === reminderDays || diffDays === 0) {
+					console.log(`[Reminder Check] Should send reminder for this event!`);
+					// Create unique ID for this reminder
+					const reminderId = `${ev.date}_${ev.text}_${diffDays}`;
+					
+					// Skip if already shown
+					if (shownReminders.includes(reminderId)) {
+						console.log(`[Reminder Check] Reminder already shown: ${reminderId}`);
+						return;
+					}
+
+					// Show notification
+					let message;
+					if (diffDays === 0) {
+						message = `Heute: ${ev.text}`;
+					} else if (diffDays === 1) {
+						message = `Morgen: ${ev.text}`;
+					} else {
+						message = `In ${diffDays} Tagen: ${ev.text}`;
+					}
+
+					console.log(`[Reminder Check] Sending notification: "${message}"`);
+					new Notification('StudiBot Erinnerung 📅', {
+						body: message,
+						icon: '/favicon.ico',
+						badge: '/favicon.ico',
+						requireInteraction: false
+					});
+
+					// Mark as shown
+					shownReminders.push(reminderId);
+					console.log(`[Reminder Check] Reminder sent and marked as shown`);
+				} else {
+					console.log(`[Reminder Check] Not the right day yet (need: ${reminderDays}, got: ${diffDays})`);
+				}
+			});
+
+			console.log(`[Reminder Check] Total reminders shown: ${shownReminders.length}`);
+
+			// Save shown reminders
+			try {
+				localStorage.setItem('shown_reminders', JSON.stringify(shownReminders));
+			} catch (e) {
+				// ignore
+			}
+		};
+
+		// Check immediately on mount
+		checkReminders();
+
+		// Then check every hour
+		const interval = setInterval(checkReminders, 60 * 60 * 1000);
+
+		return () => clearInterval(interval);
+	}, [events, googleEvents]);
+
 	// helper to add an event from UI
 	const addEvent = (dateISO: string, text: string) => {
 		// If user is logged in with Google, send to Google Calendar only
@@ -419,6 +550,39 @@ function CalendarContent() {
 		}
 	};
 
+	// Test notification function
+	const testNotification = () => {
+		if (!('Notification' in window)) {
+			alert('Dein Browser unterstützt keine Benachrichtigungen.');
+			return;
+		}
+
+		if (Notification.permission === 'denied') {
+			alert('Benachrichtigungen wurden blockiert. Bitte aktiviere sie in den Browser-Einstellungen.');
+			return;
+		}
+
+		if (Notification.permission === 'default') {
+			Notification.requestPermission().then(permission => {
+				if (permission === 'granted') {
+					showTestNotification();
+				}
+			});
+		} else {
+			showTestNotification();
+		}
+	};
+
+	const showTestNotification = () => {
+		new Notification('StudiBot Erinnerung 📅', {
+			body: 'Morgen: Abgabe Übungsblatt 3 (Mathematik I)',
+			icon: '/favicon.ico',
+			badge: '/favicon.ico',
+			requireInteraction: false
+		});
+		alert('Test-Benachrichtigung wurde gesendet! Überprüfe deinen Bildschirm.');
+	};
+
 	const fetchGoogleCalendarEvents = async (token: string) => {
 		setIsLoadingGoogleEvents(true);
 		try {
@@ -580,22 +744,38 @@ function CalendarContent() {
 							>
 								Abmelden
 							</button>
+							<button 
+								onClick={testNotification}
+								className="px-4 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+								title="Test-Benachrichtigung senden"
+							>
+								🔔 Test
+							</button>
 						</div>
 					) : (
 						<div className="w-full flex items-center justify-between">
 							<div className="text-sm text-gray-600">Mit Google anmelden, um Ihren Kalender zu synchronisieren</div>
-							<button
-								onClick={() => login()}
-								className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm font-medium"
-							>
-								<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-									<path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-									<path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
-									<path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.348 2.825.957 4.039l3.007-2.332z"/>
-									<path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
-								</svg>
-								Mit Google anmelden
-							</button>
+							<div className="flex gap-2">
+								<button
+									onClick={() => login()}
+									className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm font-medium"
+								>
+									<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+										<path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
+										<path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
+										<path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.348 2.825.957 4.039l3.007-2.332z"/>
+										<path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+									</svg>
+									Mit Google anmelden
+								</button>
+								<button 
+									onClick={testNotification}
+									className="px-4 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+									title="Test-Benachrichtigung senden"
+								>
+									🔔 Test
+								</button>
+							</div>
 						</div>
 					)}
 				</div>

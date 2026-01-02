@@ -176,12 +176,68 @@ async def chat(request: ChatRequest):
         elif msg_low in ("nein", "n", "no"):
             intent = "calendar_no"
         # If message isn't a clear yes/no, fall back to full intent detection (below)
+    
+    # If the bot is in settings configuration mode, handle settings dialog
+    elif state and state.get('configuring_settings'):
+        step = state.get('settings_step', 'ask_task_days')
+        msg = request.message.strip()
+        
+        if step == 'ask_task_days':
+            # Try to parse the number
+            try:
+                days = int(msg)
+                if days < 0 or days > 30:
+                    return {"response": "Bitte gib eine Zahl zwischen 0 und 30 ein."}
+                
+                # Save to state and ask next question
+                with state_lock:
+                    conversation_state[username]['reminder_days_tasks'] = days
+                    conversation_state[username]['settings_step'] = 'ask_exam_days'
+                    conversation_state[username]['ts'] = time.time()
+                
+                return {"response": f"Gut, ich erinnere dich {days} Tag(e) vor Aufgaben-Deadlines.\n\nWie viele Tage vor einer Klausur möchtest du erinnert werden? (z.B. 7 für eine Woche vorher)"}
+            except ValueError:
+                return {"response": "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."}
+        
+        elif step == 'ask_exam_days':
+            # Try to parse the number
+            try:
+                days = int(msg)
+                if days < 0 or days > 30:
+                    return {"response": "Bitte gib eine Zahl zwischen 0 und 30 ein."}
+                
+                # Save settings and clear state
+                task_days = state.get('reminder_days_tasks', 1)
+                
+                with state_lock:
+                    if username in conversation_state:
+                        del conversation_state[username]
+                
+                # Return settings to frontend for storage
+                return {
+                    "response": f"Alles klar! Deine Erinnerungseinstellungen wurden gespeichert:\n- Aufgaben: {task_days} Tag(e) vorher\n- Klausuren: {days} Tag(e) vorher\n\nIch werde dich entsprechend benachrichtigen!",
+                    "settings": {
+                        "reminder_days_tasks": task_days,
+                        "reminder_days_exams": days
+                    }
+                }
+            except ValueError:
+                return {"response": "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."}
+        
+        # Fallback: should not reach here
+        with state_lock:
+            if username in conversation_state:
+                del conversation_state[username]
+        return {"response": "Ein Fehler ist aufgetreten. Bitte versuche es erneut."}
 
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
     if intent is None:
         msg_low = request.message.strip().lower()
+        # Check for settings/reminders
+        if any(word in msg_low for word in ["einstellung", "erinnerung", "benachrichtigung", "notification", "settings", "reminder"]):
+            intent = "settings"
         # Check for common Moodle-related keywords
-        if any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
+        elif any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
             intent = "get_moodle_appointments"
         # Check for Stine exam keywords
         elif any(word in msg_low for word in ["prüfung", "klausur", "exam"]):
@@ -297,6 +353,15 @@ async def chat(request: ChatRequest):
             return {"response": response}
     elif intent == "get_mail":
         return {"response": "Die Funktion zum Abrufen von E-Mails ist noch nicht implementiert."}
+    elif intent == "settings":
+        # Start settings configuration dialog
+        with state_lock:
+            conversation_state[username] = {
+                'configuring_settings': True,
+                'settings_step': 'ask_task_days',
+                'ts': time.time()
+            }
+        return {"response": "Lass uns deine Erinnerungseinstellungen konfigurieren! \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"}
     elif intent == "greeting":
         return {"response": "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"}
     elif intent == "help":

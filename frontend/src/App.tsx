@@ -219,6 +219,16 @@ function App() {
         setMessages(prev => prev.slice(0, -1));
       }
 
+      // If backend returned settings, save them to localStorage
+      if (res.data && res.data.settings) {
+        try {
+          localStorage.setItem('reminder_settings', JSON.stringify(res.data.settings));
+          console.log('Reminder settings saved:', res.data.settings);
+        } catch (e) {
+          console.error('Failed to save settings:', e);
+        }
+      }
+
       // If the backend returned suggested events, append them as clickable buttons
       if (res.data && res.data.suggested_events && res.data.suggested_events.length > 0) {
         const eventsHtml = res.data.suggested_events.map(evt => {
