@@ -66,12 +66,3 @@ npm run dev
 ```
 
 This will produce a localhost link (typically `http://localhost:5173`) which you can click on.
-
-## 4 Features
-
-### Google Calendar Integration
-- **Login**: Click "Mit Google anmelden" to authenticate with your Google account
-- **View Events**: Your Google Calendar events appear with a 📅 emoji
-- **Add Local Events**: Add events that only exist in this app
-- **Sync**: Events sync automatically when you change months or refresh the browser
-- **Delete**: Only local events can be deleted in this app; use Google Calendar to manage Google events
