@@ -1,28 +1,77 @@
 # Setup Guide
 
-## 1 API Key
-Create a `.env` file in `\backend\` containing `GEMINI_API_KEY=` followed by your own API Key.
+## 1 Environment Variables (.env files)
 
+### Backend (.env in `\backend\`)
+Create a `.env` file in the `\backend\` directory with the following content:
 
-## 2 Start the App
-Firstly, navigate to this project in a powershell terminal and run `pip install -r backend/requirements.txt`. 
-This will install all needed packages. 
+```env
+# OpenAI API Key for ChatGPT functionality
+OPENAI_API_KEY=your_openai_api_key_here
 
-Secondly, open up two powershell terminals. In one, open `\backend\`, in the other open `\frontend\`.
-### Start backend:
-In your `\backend\`command line, run this command:
+# Google OAuth Configuration for Calendar Integration
+# Get these from: https://console.cloud.google.com/apis/credentials
+GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_google_client_secret
 
-`.\.venv\Scripts\python.exe -m uvicorn backend:app --reload --port 8000`
+# Frontend URL for CORS and redirects
+FRONTEND_URL=http://localhost:5173
+```
 
-(for macOS/Linux it is: `python3 -m venv .venv && source .venv/bin/activate && uvicorn backend:app --reload --port 8000`)
+**How to get Google credentials:**
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Create a new OAuth 2.0 Client ID (Web application)
+3. Add `http://localhost:5173` to the **Authorized redirect URIs**
+4. Enable the **Google Calendar API** in your project
+5. Copy the Client ID and Client Secret into the `.env` file
 
-### Start frontend:
-Before starting your frontend, ensure that you have Node.js installed on your device.
+### Frontend (.env in `\frontend\`)
+Create a `.env` file in the `\frontend\` directory:
 
-In your `\frontend\`command line, run these two commands:
+```env
+# Google OAuth Client ID (same as backend)
+VITE_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 
-`npm install`
+# Backend API URL
+VITE_BACKEND_URL=http://localhost:8000
+```
 
-`npm run dev`
+## 2 Install Dependencies
+Navigate to this project in a PowerShell terminal and run:
 
-This should produce a link to a localhost page which you can click on.
+```powershell
+pip install -r backend/requirements.txt
+```
+
+## 3 Start the App
+Open two separate PowerShell terminals. In one, go to `\backend\`, in the other go to `\frontend\`.
+
+### Start Backend:
+In your `\backend\` terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend:app --reload --port 8000
+```
+
+(for macOS/Linux: `python3 -m venv .venv && source .venv/bin/activate && uvicorn backend:app --reload --port 8000`)
+
+### Start Frontend:
+Before starting, ensure **Node.js** is installed.
+
+In your `\frontend\` terminal, run:
+
+```powershell
+npm install
+npm run dev
+```
+
+This will produce a localhost link (typically `http://localhost:5173`) which you can click on.
+
+## 4 Features
+
+### Google Calendar Integration
+- **Login**: Click "Mit Google anmelden" to authenticate with your Google account
+- **View Events**: Your Google Calendar events appear with a 📅 emoji
+- **Add Local Events**: Add events that only exist in this app
+- **Sync**: Events sync automatically when you change months or refresh the browser
+- **Delete**: Only local events can be deleted in this app; use Google Calendar to manage Google events

@@ -18,6 +18,12 @@ from src.stine_exam_scraper import scrape_stine_exams
 from src.llm import ask_chatgpt_moodle, ask_chatgpt_exams, determine_intent, pick_api_key
 from src.ics_calendar import make_calendar_entries
 from src.utils import resolve_frontend_dist
+from src.google_calendar import (
+    exchange_code_for_token,
+    fetch_calendar_events,
+    get_user_info,
+    refresh_access_token
+)
 
 # Load .env file if present (developer convenience). Requires python-dotenv in requirements.
 try:
@@ -312,6 +318,102 @@ def api_delete_credentials():
         return {"success": True, "message": "Credentials deleted successfully"}
     else:
         return {"success": False, "message": "Failed to delete credentials"}
+
+
+# ============================================================================
+# Google Calendar API Endpoints
+# ============================================================================
+
+@app.post("/api/google/oauth/callback")
+async def google_oauth_callback(data: dict):
+    """
+    Handle OAuth callback - exchange authorization code for tokens
+    """
+    logging.info(f"OAuth callback received with data keys: {list(data.keys())}")
+    
+    code = data.get("code")
+    redirect_uri = data.get("redirect_uri")
+    
+    if not code or not redirect_uri:
+        logging.error(f"Missing code or redirect_uri. Code present: {bool(code)}, redirect_uri: {redirect_uri}")
+        return {"success": False, "message": "Missing code or redirect_uri"}
+    
+    logging.info(f"Exchanging authorization code for tokens...")
+    # Exchange code for tokens
+    token_data = exchange_code_for_token(code, redirect_uri)
+    
+    if not token_data:
+        error_msg = "Failed to exchange code for token - check backend logs for Google API response"
+        logging.error(error_msg)
+        return {"success": False, "message": error_msg, "debug": "Check server logs"}
+    
+    logging.info("Successfully exchanged code for tokens, fetching user info...")
+    # Fetch user info
+    access_token = token_data.get("access_token")
+    user_info = get_user_info(access_token)
+    
+    if not user_info:
+        logging.error("Failed to fetch user info")
+        return {"success": False, "message": "Failed to fetch user info"}
+    
+    logging.info(f"Successfully authenticated user: {user_info.get('email')}")
+    return {
+        "success": True,
+        "access_token": access_token,
+        "refresh_token": token_data.get("refresh_token"),
+        "expires_in": token_data.get("expires_in"),
+        "user": {
+            "email": user_info.get("email"),
+            "name": user_info.get("name"),
+            "picture": user_info.get("picture"),
+        }
+    }
+
+
+@app.post("/api/google/calendar/events")
+async def get_calendar_events(data: dict):
+    """
+    Fetch Google Calendar events for a given time range
+    """
+    logging.info("Calendar events endpoint called")
+    access_token = data.get("access_token")
+    time_min = data.get("time_min")
+    time_max = data.get("time_max")
+    
+    if not access_token:
+        logging.error("Missing access_token in calendar events request")
+        return {"success": False, "message": "Missing access_token"}
+    
+    logging.info(f"Fetching calendar events from {time_min} to {time_max}")
+    events = fetch_calendar_events(access_token, time_min, time_max)
+    logging.info(f"Retrieved {len(events)} calendar events")
+    
+    return {
+        "success": True,
+        "events": events
+    }
+
+
+@app.post("/api/google/oauth/refresh")
+async def refresh_token_endpoint(data: dict):
+    """
+    Refresh access token using refresh token
+    """
+    refresh_token = data.get("refresh_token")
+    
+    if not refresh_token:
+        return {"success": False, "message": "Missing refresh_token"}
+    
+    token_data = refresh_access_token(refresh_token)
+    
+    if not token_data:
+        return {"success": False, "message": "Failed to refresh token"}
+    
+    return {
+        "success": True,
+        "access_token": token_data.get("access_token"),
+        "expires_in": token_data.get("expires_in"),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
