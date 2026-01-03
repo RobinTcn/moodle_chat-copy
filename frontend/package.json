@@ -2,6 +2,12 @@
   "dependencies": {
     "@react-oauth/google": "^0.13.4",
     "axios": "^1.13.2",
+    "katex": "^0.16.11",
+    "react-markdown": "^9.0.1",
+    "rehype-katex": "^7.0.0",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0",
     "gapi-script": "^1.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

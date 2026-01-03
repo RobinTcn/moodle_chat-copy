@@ -75,6 +75,82 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
     return resp_text
 
 
+def ask_chatgpt_topic_help(module: str, topic: str, materials: str, user_question: str, api_key: Optional[str]) -> str:
+    """Generate an explanation for a given topic (exercises only if explicitly requested).
+
+    Args:
+        module: Course/module name provided by the user.
+        topic: Topic the user is working on.
+        materials: Free-text hints/notes the user provided (may be empty).
+        user_question: Optional question or "keine" if none. If contains "aufgabe" or "übung", include exercises.
+        api_key: API key to call the LLM.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return "Fehler: 'openai' Paket nicht installiert."
+
+    key = pick_api_key(api_key)
+    if not key:
+        return "Kein API-Key vorhanden. Bitte in den Einstellungen hinzufügen."
+
+    client = OpenAI(api_key=key)
+    materials_text = materials.strip() if materials else "Keine Materialien angegeben."
+    question_text = user_question.strip() if user_question else "keine"
+    
+    # Check if exercises should be included
+    include_exercises = any(kw in question_text.lower() for kw in ["aufgabe", "übung", "exercise"])
+
+    system_msg = (
+        "Du bist ein verständlicher Tutor. Antworte auf Deutsch und nutze Markdown. Benutze für deine Antworten immer nur wenige Sätze.\n"
+        "Math darf als LaTeX in $...$ oder $$...$$ stehen.\n"
+        "WICHTIG: Nutze immer diese Struktur exakt, mit Zeilenumbrüchen wie gezeigt (ersetze Thema mit dem aktuellen Thema):\n\n"
+        "## Thema\n\n"
+        "**Kurz-Erklärung:** (2-4 Sätze)\n\n"
+        "**Kernpunkte:**\n"
+        "- Punkt 1\n"
+        "- Punkt 2\n"
+        "- Punkt 3\n\n"
+        "Schreibe Listen IMMER mit '- ' am Anfang jeder Zeile, keine anderen Formate!\n"
+        " Nutze Überschriften mit ##, fettgedruckte Labels mit **, und Aufzählungen mit -.\n"
+        " Frag nicht selbstständig nach Fragen oder Übungen, sondern warte auf die Nutzeranfrage.\n"
+        " Schlage nicht vor, dass du irgendetwas tun kannst, sondern warte auf die Nutzeranfrage."
+    )
+    
+    if include_exercises:
+        system_msg += (
+            "**Übungsaufgaben (ohne Lösungen):**\n"
+            "1. Erste Aufgabe\n"
+            "2. Zweite Aufgabe\n"
+            "3. Dritte Aufgabe\n\n"
+        )
+    else:
+        system_msg += (
+            "Gib KEINE Übungsaufgaben, es sei denn, der Nutzer fragt danach.\n\n"
+        )
+    
+    system_msg += (
+        "Wenn eine konkrete Frage gestellt wurde, beantworte sie zuerst kurz.\n"
+        "Lade immer zu Zwischenfragen ein.\n"
+    )
+
+    user_msg = (
+        f"Modul: {module or 'unbekannt'}\n"
+        f"Thema: {topic or 'unbekannt'}\n"
+        f"Materialhinweise: {materials_text}\n"
+        f"Frage: {question_text}"
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-5-mini",
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg}
+        ],
+    )
+    return response.choices[0].message.content
+
+
 async def determine_intent(message: str, api_key: Optional[str]) -> str:
     """Asynchronously determine the user's intent using ChatGPT.
 
@@ -91,6 +167,14 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
         "help",
         "calendar_yes",
         "calendar_no",
+        "start_exam_wizard",
+        "stop_exam_wizard",
+        "wizard_pick_module",
+        "wizard_pick_topics",
+        "wizard_pick_order",
+        "wizard_collect_materials",
+        "wizard_questions_or_walkthrough",
+        "wizard_followup",
         "unknown",
     ]
 
@@ -106,6 +190,14 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
         + "If the user asks for help or how to use the bot return 'help'.\n"
         + "If the user replies with an affirmative like 'ja' (German) or 'yes', return 'calendar_yes'.\n"
         + "If the user replies with a negative like 'nein' (German) or 'no', return 'calendar_no'.\n"
+        + "If the user wants to start exam prep (e.g., Klausurvorbereitung, Lernplan, Wizard starten), return 'start_exam_wizard'.\n"
+        + "If the user wants to stop or exit the exam prep wizard, return 'stop_exam_wizard'.\n"
+        + "If the user provides module names, return 'wizard_pick_module'.\n"
+        + "If the user lists topics/chapters, return 'wizard_pick_topics'.\n"
+        + "If the user chooses or asks for the learning order, return 'wizard_pick_order'.\n"
+        + "If the user provides uploads/links/material, return 'wizard_collect_materials'.\n"
+        + "If the user says they have/no questions or wants explanation/Übungen, return 'wizard_questions_or_walkthrough'.\n"
+        + "If the user continues within the wizard (follow-ups), return 'wizard_followup'.\n"
         + f"User message: \"{msg}\"\n"
     )
 

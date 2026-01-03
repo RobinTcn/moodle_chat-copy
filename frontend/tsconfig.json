@@ -5,13 +5,14 @@
     "allowJs": true,                           // JS-Dateien erlaubt
     "jsx": "react-jsx",                        // React JSX-Syntax
     "module": "esnext",                        // ES Module
-    "moduleResolution": "node",                // Node-Modulauflösung
+    "moduleResolution": "bundler",             // Besserer Typ-Fund für ESM-Pakete wie KaTeX
     "strict": true,                            // Strikte Typprüfung
     "esModuleInterop": true,                   // Für Default-Imports
     "skipLibCheck": true,                       // Bibliotheken-Typen ignorieren
     "forceConsistentCasingInFileNames": true, // Einheitliche Dateinamen
     "noFallthroughCasesInSwitch": true,       // Vermeidung von Fehlern in switch
-    "resolveJsonModule": true                  // JSON-Importe erlaubt
+    "resolveJsonModule": true,                  // JSON-Importe erlaubt
+    "types": ["katex"]                // Explizit KaTeX- und Node-Typen laden
   },
   "include": ["src"],                         // Alle TS/TSX Dateien im src-Ordner
   "exclude": ["node_modules", "build"]       // Ausschließen

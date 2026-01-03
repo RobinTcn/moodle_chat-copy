@@ -15,7 +15,7 @@ from src.models import ChatRequest, CredentialsSaveRequest, CredentialsResponse
 from src.credentials import save_credentials, load_credentials, delete_credentials
 from src.moodle_scraper import scrape_moodle_text
 from src.stine_exam_scraper import scrape_stine_exams
-from src.llm import ask_chatgpt_moodle, ask_chatgpt_exams, determine_intent, pick_api_key
+from src.llm import ask_chatgpt_moodle, ask_chatgpt_exams, ask_chatgpt_topic_help, determine_intent, pick_api_key
 from src.ics_calendar import make_calendar_entries, extract_events_from_ics
 from src.utils import resolve_frontend_dist
 from src.google_calendar import (
@@ -71,6 +71,23 @@ app.add_middleware(
 conversation_state = {}
 state_lock = threading.Lock()
 STATE_EXPIRY_SECONDS = 120  # consent expires after 2 minutes
+
+# Wizard flow constants
+WIZARD_STEP_PICK_MODULE = "pick_module"
+WIZARD_STEP_PICK_TOPICS = "pick_topics"
+WIZARD_STEP_PICK_ORDER = "pick_order"
+WIZARD_STEP_COLLECT_MATERIALS = "collect_materials"
+WIZARD_STEP_QUESTIONS = "questions_or_walkthrough"
+WIZARD_STEP_FOLLOWUP = "followup"
+
+WIZARD_INTENT_STEPS = {
+    "wizard_pick_module": WIZARD_STEP_PICK_MODULE,
+    "wizard_pick_topics": WIZARD_STEP_PICK_TOPICS,
+    "wizard_pick_order": WIZARD_STEP_PICK_ORDER,
+    "wizard_collect_materials": WIZARD_STEP_COLLECT_MATERIALS,
+    "wizard_questions_or_walkthrough": WIZARD_STEP_QUESTIONS,
+    "wizard_followup": WIZARD_STEP_FOLLOWUP,
+}
 
 # Cache for scraped data to avoid expensive re-scraping
 # Keyed by (username, data_type) -> { 'data': str, 'ts': float }
@@ -130,6 +147,154 @@ def cache_scraped_data(username: str, data_type: str, raw_data: str, chatgpt_res
     logging.info(f"Cached {data_type} scraped data (user: {username})")
 
 
+def _new_wizard_state():
+    return {
+        'active': True,
+        'step': WIZARD_STEP_PICK_MODULE,
+        'module': None,
+        'topics': [],
+        'order': [],
+        'order_index': 0,
+        'current_topic': None,
+        'materials': {}
+    }
+
+
+def _parse_topics_list(text: str):
+    parts = []
+    for raw in text.replace(";", ",").split("\n"):
+        parts.extend(raw.split(","))
+    topics = [p.strip() for p in parts if p.strip()]
+    return topics
+
+
+def _pick_topic_from_input(user_text: str, topics):
+    if not topics:
+        return None
+    lowered = user_text.strip().lower()
+    if not lowered:
+        return None
+    # numeric selection (1-based)
+    if lowered.isdigit():
+        idx = int(lowered) - 1
+        if 0 <= idx < len(topics):
+            return topics[idx]
+    for t in topics:
+        if lowered == t.lower():
+            return t
+    # partial match
+    for t in topics:
+        if lowered in t.lower():
+            return t
+    return None
+
+
+def _handle_wizard_message(username: str, message: str, state: dict, api_key: str = None):
+    wizard = (state or {}).get('wizard')
+    if not wizard or not wizard.get('active'):
+        return None
+
+    msg = message.strip()
+    step = wizard.get('step', WIZARD_STEP_PICK_MODULE)
+    response = None
+
+    if step == WIZARD_STEP_PICK_MODULE:
+        wizard['module'] = msg
+        wizard['step'] = WIZARD_STEP_PICK_TOPICS
+        response = f"Alles klar, Modul '{msg}'.\n\n Geht es für dich um ein oder mehrere bestimmte Themen oder Kapitel? Bitte liste diese auf, getrennt durch Kommas."
+
+    elif step == WIZARD_STEP_PICK_TOPICS:
+        topics = _parse_topics_list(msg)
+        if not topics:
+            response = "Ich habe keine Themen erkannt. Bitte liste die Themen oder Kapitel, getrennt durch Kommas oder Zeilenumbrüche."
+        else:
+            wizard['topics'] = topics
+            wizard['step'] = WIZARD_STEP_PICK_ORDER
+            topic_list = "\n- " + "\n- ".join(topics)
+            response = (
+                f"Verstanden. Ich habe diese Themen gespeichert:{topic_list}\n\n"
+                "Mit was möchtest du anfangen? Wenn du unsicher bist, schreibe 'Vorschlag', dann schlage ich eine Reihenfolge vor."
+            )
+
+    elif step == WIZARD_STEP_PICK_ORDER:
+        topics = wizard.get('topics', [])
+        choice = _pick_topic_from_input(msg, topics)
+        if 'vorschlag' in msg.lower() or not choice:
+            order = topics
+            choice = topics[0] if topics else None
+            note = "Dann fangen wir doch einfach mit dem ersten Thema an." if topics else "Keine Themen vorhanden."
+        else:
+            order = [choice] + [t for t in topics if t != choice]
+            note = f"Wir starten mit '{choice}'."
+
+        if not choice:
+            response = "Ich konnte kein Thema auswählen. Bitte nenne ein Thema oder schreibe 'Vorschlag'."
+        else:
+            wizard['order'] = order
+            wizard['current_topic'] = choice
+            wizard['order_index'] = 0
+            wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
+            response = (
+                f"{note} Wenn du möchtest, lade Folien, Aufgaben oder Altklausuren hoch oder beschreibe den Stoff kurz.\n\n"
+                " Wenn nicht, schreibe 'kein upload'."
+            )
+
+    elif step == WIZARD_STEP_COLLECT_MATERIALS:
+        current_topic = wizard.get('current_topic')
+        wizard.setdefault('materials', {})[current_topic] = msg
+        wizard['step'] = WIZARD_STEP_QUESTIONS
+        response = (
+            f"Alles klar zu '{current_topic}'. Hast du bereits konkrete Fragen?"
+            " Falls nein, starte ich mit einer kurzen Erklärung des Themas."
+        )
+
+    elif step == WIZARD_STEP_QUESTIONS:
+        current_topic = wizard.get('current_topic')
+        module = wizard.get('module')
+        materials = wizard.get('materials', {}).get(current_topic, "")
+        wizard['step'] = WIZARD_STEP_FOLLOWUP
+        low = msg.lower()
+        if any(tok in low for tok in ["keine", "kein", "nein"]):
+            ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, "keine", api_key)
+            response = ai_resp + "\n\nStell jederzeit Zwischenfragen oder schreibe 'weiter' für das nächste Thema."
+        else:
+            ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, msg, api_key)
+            response = ai_resp + "\n\nWenn du fertig bist, schreibe 'weiter' für das nächste Thema."
+
+    elif step == WIZARD_STEP_FOLLOWUP:
+        current_topic = wizard.get('current_topic')
+        order = wizard.get('order', [])
+        idx = wizard.get('order_index', 0)
+        low = msg.lower()
+        if any(tok in low for tok in ["weiter", "nächste", "next"]):
+            next_idx = idx + 1
+            if next_idx < len(order):
+                wizard['order_index'] = next_idx
+                wizard['current_topic'] = order[next_idx]
+                wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
+                response = (
+                    f"Nächstes Thema: '{order[next_idx]}'. Lade kurz Materialien hoch oder beschreibe den Stoff."
+                    " Wenn du nichts hast, schreibe 'kein upload'."
+                )
+            else:
+                wizard['active'] = False
+                wizard['step'] = WIZARD_STEP_PICK_MODULE
+                response = "Du hast alle Themen durchgearbeitet. Wizard beendet."
+        else:
+            module = wizard.get('module')
+            materials = wizard.get('materials', {}).get(current_topic, "")
+            ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, msg, api_key)
+            response = ai_resp + "\n\nSchreibe 'weiter' für das nächste Thema oder frag weiter zu diesem Thema."
+
+    # update timestamp and persist wizard state
+    with state_lock:
+        conversation_state[username] = state or {}
+        conversation_state[username]['wizard'] = wizard
+        conversation_state[username]['ts'] = time.time()
+
+    return response
+
+
 @app.get('/download_ics/{filename}')
 def download_ics(filename: str):
     """Serve a previously saved ICS debug file. Only allow filenames starting with the expected prefix to
@@ -166,11 +331,15 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
                 state = None
 
+    wizard_state = state.get('wizard') if state else None
+    wizard_active = bool(wizard_state and wizard_state.get('active'))
+    msg_low = request.message.strip().lower()
+    stop_keywords = ("exit")
+
     # If the bot previously asked about adding to calendar, interpret simple yes/no locally
     intent = None
     if state and state.get('awaiting_calendar'):
         # Interpret a short affirmative/negative reply without calling ChatGPT
-        msg_low = request.message.strip().lower()
         if msg_low in ("ja", "j", "yes", "y", "klar", "gerne"):
             intent = "calendar_yes"
         elif msg_low in ("nein", "n", "no"):
@@ -230,12 +399,38 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         return {"response": "Ein Fehler ist aufgetreten. Bitte versuche es erneut."}
 
+    # While wizard is active: skip intent detection; only allow explicit stop keyword
+    if wizard_active:
+        if any(msg_low.strip() == kw for kw in stop_keywords):
+            with state_lock:
+                user_state = conversation_state.get(username, {})
+                user_state.pop('wizard', None)
+                user_state['ts'] = time.time()
+                conversation_state[username] = user_state
+            return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
+
+        wizard_response = _handle_wizard_message(username, request.message, state, api_key)
+        if wizard_response:
+            return {"response": wizard_response}
+        # If wizard handler could not process, keep user in wizard and prompt to continue or stop
+        return {"response": "Ich bin im Klausur-Wizard. Bitte beantworte die letzte Frage oder schreibe 'wizard beenden' zum Abbrechen."}
+
+    # Quick keywords for starting the wizard without LLM
+    if intent is None:
+        if any(kw in msg_low for kw in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
+            intent = "start_exam_wizard"
+        elif any(msg_low.strip() == kw for kw in stop_keywords):
+            intent = "stop_exam_wizard"
+
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
     if intent is None:
-        msg_low = request.message.strip().lower()
         # Check for settings/reminders
         if any(word in msg_low for word in ["einstellung", "erinnerung", "benachrichtigung", "notification", "settings", "reminder"]):
             intent = "settings"
+        elif any(word in msg_low for word in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
+            intent = "start_exam_wizard"
+        elif any(msg_low.strip() == kw for kw in stop_keywords):
+            intent = "stop_exam_wizard"
         # Check for common Moodle-related keywords
         elif any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
             intent = "get_moodle_appointments"
@@ -272,8 +467,40 @@ async def chat(request: ChatRequest):
     logging.info(f"[Chat] Detected intent: {intent}")
     logging.info(f"[Chat] Username: {username}")
     logging.info(f"[Chat] Has password: {bool(request.password)}")
+
+    wizard_step_intents = set(WIZARD_INTENT_STEPS.keys())
     
     # Route based on detected intent
+    if intent == "start_exam_wizard":
+        base_state = state or {}
+        wizard = _new_wizard_state()
+        with state_lock:
+            conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
+        return {"response": "Gern helfe ich dir bei der Klausurvorbereitung.\n\n"
+                 " Du kannst den Vorbereitungs-Wizard jederzeit mit 'exit' abbrechen.\n\n"
+                 " Damit ich dir helfen kann, muss ich dir zunächst ein paar Fragen stellen.\n"
+                 " 1. Um welches Modul geht es?"}
+
+    elif intent == "stop_exam_wizard":
+        with state_lock:
+            user_state = conversation_state.get(username, {})
+            user_state.pop('wizard', None)
+            user_state['ts'] = time.time()
+            conversation_state[username] = user_state
+        return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
+
+    elif intent in wizard_step_intents:
+        if not wizard_active:
+            base_state = state or {}
+            wizard = _new_wizard_state()
+            with state_lock:
+                conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
+            return {"response": "Ich starte den Klausur-Wizard. Welches Modul?"}
+        wizard_response = _handle_wizard_message(username, request.message, state or {}, api_key)
+        if wizard_response:
+            return {"response": wizard_response}
+        # fall through if no response
+
     if intent == "get_moodle_appointments":
         logging.info("[Chat] Processing Moodle appointments request")
         try:
@@ -403,7 +630,7 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         return {"response": "Alles klar. Mit was kann ich dir sonst helfen?"}
     else:
-        return {"response": "Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen."}
+        return {"response": "Entschuldigung, ich habe dich nicht verstanden. Du kannst nach Moodle-Terminen fragen oder den Klausur-Wizard starten."}
 
 
 @app.get("/health")
