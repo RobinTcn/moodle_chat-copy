@@ -18,6 +18,7 @@ from src.stine_exam_scraper import scrape_stine_exams
 from src.llm import ask_chatgpt_moodle, ask_chatgpt_exams, ask_chatgpt_topic_help, determine_intent, pick_api_key
 from src.ics_calendar import make_calendar_entries, extract_events_from_ics
 from src.utils import resolve_frontend_dist
+from evaluation_logger import start_turn, end_turn
 from src.google_calendar import (
     exchange_code_for_token,
     fetch_calendar_events,
@@ -315,12 +316,21 @@ async def chat(request: ChatRequest):
     global latestMessage
     latestMessage = request.message
 
+    # === EVAL LOG START (Turn beginnt sobald Message im Backend ankommt) ===
+    timer = start_turn(username=request.username, conv_id=request.conv_id, user_message=request.message)
+
+    # ================================================================
+
     # Use ChatGPT to classify the user's intent. If ChatGPT fails, determine_intent
     # will return 'unknown' and we fall back to a simple keyword check.
     username = request.username
     api_key = pick_api_key(request.api_key)
+
     if not api_key:
-        return {"response": "Kein API-Key gesetzt. Bitte den ChatGPT-Key beim Start speichern oder in den Einstellungen hinzufügen."}
+        msg = "Kein API-Key gesetzt. Bitte den ChatGPT-Key beim Start speichern oder in den Einstellungen hinzufügen."
+        end_turn(timer, bot_message=msg, intent="no_api_key")
+        return {"response": msg}
+
 
     # Check and expire any old conversation state for this user
     with state_lock:
@@ -356,7 +366,10 @@ async def chat(request: ChatRequest):
             try:
                 days = int(msg)
                 if days < 0 or days > 30:
-                    return {"response": "Bitte gib eine Zahl zwischen 0 und 30 ein."}
+                    msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
+                    end_turn(timer, bot_message=msg, intent="settings")
+                    return {"response": msg}
+
                 
                 # Save to state and ask next question
                 with state_lock:
@@ -364,16 +377,25 @@ async def chat(request: ChatRequest):
                     conversation_state[username]['settings_step'] = 'ask_exam_days'
                     conversation_state[username]['ts'] = time.time()
                 
-                return {"response": f"Gut, ich erinnere dich {days} Tag(e) vor Aufgaben-Deadlines.\n\nWie viele Tage vor einer Klausur möchtest du erinnert werden? (z.B. 7 für eine Woche vorher)"}
+                msg = f"Gut, ich erinnere dich {days} Tag(e) vor Aufgaben-Deadlines.\n\nWie viele Tage vor einer Klausur möchtest du erinnert werden? (z.B. 7 für eine Woche vorher)"
+                end_turn(timer, bot_message=msg, intent="settings")
+                return {"response": msg}
+
             except ValueError:
-                return {"response": "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."}
+                msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
+                end_turn(timer, bot_message=msg, intent="settings")
+                return {"response": msg}
+
         
         elif step == 'ask_exam_days':
             # Try to parse the number
             try:
                 days = int(msg)
                 if days < 0 or days > 30:
-                    return {"response": "Bitte gib eine Zahl zwischen 0 und 30 ein."}
+                    msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
+                    end_turn(timer, bot_message=msg, intent="settings")
+                    return {"response": msg}
+
                 
                 # Save settings and clear state
                 task_days = state.get('reminder_days_tasks', 1)
@@ -383,21 +405,30 @@ async def chat(request: ChatRequest):
                         del conversation_state[username]
                 
                 # Return settings to frontend for storage
+                msg = f"Alles klar! Deine Erinnerungseinstellungen wurden gespeichert:\n- Aufgaben: {task_days} Tag(e) vorher\n- Klausuren: {days} Tag(e) vorher\n\nIch werde dich entsprechend benachrichtigen!"
+                end_turn(timer, bot_message=msg, intent="settings")
                 return {
-                    "response": f"Alles klar! Deine Erinnerungseinstellungen wurden gespeichert:\n- Aufgaben: {task_days} Tag(e) vorher\n- Klausuren: {days} Tag(e) vorher\n\nIch werde dich entsprechend benachrichtigen!",
-                    "settings": {
-                        "reminder_days_tasks": task_days,
-                        "reminder_days_exams": days
-                    }
+                    "response": msg,
+                     "settings": {
+                     "reminder_days_tasks": task_days,
+                      "reminder_days_exams": days
+                     }
                 }
+
             except ValueError:
-                return {"response": "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."}
+                msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
+                end_turn(timer, bot_message=msg, intent="settings")
+                return {"response": msg}
+
         
         # Fallback: should not reach here
         with state_lock:
             if username in conversation_state:
                 del conversation_state[username]
-        return {"response": "Ein Fehler ist aufgetreten. Bitte versuche es erneut."}
+        msg = "Ein Fehler ist aufgetreten. Bitte versuche es erneut."
+        end_turn(timer, bot_message=msg, intent="settings")
+        return {"response": msg}
+
 
     # While wizard is active: skip intent detection; only allow explicit stop keyword
     if wizard_active:
@@ -520,7 +551,10 @@ async def chat(request: ChatRequest):
                 # Check if scraper returned an error
                 if any(error_keyword in termine for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
                     logging.warning(f"[Chat] Scraper returned error: {termine[:100]}")
-                    return {"response": "Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
+                    msg = "Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal."
+                    end_turn(timer, bot_message=msg, intent=intent)
+                    return {"response": msg}
+
                 
                 # Ask ChatGPT to format the data
                 logging.info("[Chat] Asking ChatGPT to format Moodle data")
@@ -538,12 +572,19 @@ async def chat(request: ChatRequest):
                     # IMPORTANT: Store RAW scraper data, not formatted response
                     conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': termine, 'ts': time.time() }
                 logging.info("[Chat] Calendar option offered - raw data stored in state")
+            end_turn(timer, bot_message=response, intent=intent)
             return {"response": response}
+
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
+            end_turn(timer, bot_message=response, intent=intent)
             return {"response": response}
+
     elif intent == "get_stine_messages":
-        return {"response": "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."}
+        msg = "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     elif intent == "get_stine_exams":
         try:
             # Check cache first for scraped data AND ChatGPT response
@@ -559,7 +600,10 @@ async def chat(request: ChatRequest):
                 # Check if scraper returned an error
                 if any(error_keyword in exams_text for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
                     logging.warning(f"[Chat] STINE scraper returned error: {exams_text[:100]}")
-                    return {"response": "STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal."}
+                    msg = "STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal."
+                    end_turn(timer, bot_message=msg, intent=intent)
+                    return {"response": msg}
+
                 
                 # Ask ChatGPT to format the data
                 response = ask_chatgpt_exams(exams_text, api_key)
@@ -574,12 +618,19 @@ async def chat(request: ChatRequest):
                     # IMPORTANT: Store RAW scraper data, not formatted response
                     conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': exams_text, 'ts': time.time() }
                 logging.info("[Chat] Calendar option offered for STINE exams - raw data stored in state")
+            end_turn(timer, bot_message=response, intent=intent)
             return {"response": response}
+
         except Exception as e:
             response = f"Fehler beim Abrufen der Stine-Prüfungen: {e}"
+            end_turn(timer, bot_message=response, intent=intent)
             return {"response": response}
+
     elif intent == "get_mail":
-        return {"response": "Die Funktion zum Abrufen von E-Mails ist noch nicht implementiert."}
+        msg = "Die Funktion zum Abrufen von E-Mails ist noch nicht implementiert."
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     elif intent == "settings":
         # Start settings configuration dialog
         with state_lock:
@@ -588,11 +639,20 @@ async def chat(request: ChatRequest):
                 'settings_step': 'ask_task_days',
                 'ts': time.time()
             }
-        return {"response": "Lass uns deine Erinnerungseinstellungen konfigurieren! \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"}
+        msg = "Lass uns deine Erinnerungseinstellungen konfigurieren! \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     elif intent == "greeting":
-        return {"response": "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"}
+        msg = "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     elif intent == "help":
-        return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
+        msg = "Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     elif intent == "calendar_yes":
         # proceed to create calendar entries
         termine = None
@@ -605,7 +665,10 @@ async def chat(request: ChatRequest):
         
         if not termine:
             logging.error("[Chat] Calendar YES: No raw data found in state")
-            return {"response": "Fehler: Keine Termine verfügbar. Bitte erneut anfragen."}
+            msg = "Fehler: Keine Termine verfügbar. Bitte erneut anfragen."
+            end_turn(timer, bot_message=msg, intent=intent)
+            return {"response": msg}
+
         
         try:
             logging.info(f"[Chat] Calendar YES - using raw data ({len(termine)} chars)")
@@ -618,19 +681,33 @@ async def chat(request: ChatRequest):
             
             # Return only the suggested events as buttons, no ICS file download
             resp = {"suggested_events": suggested_events}
+            end_turn(timer, bot_message=f"suggested_events returned ({len(suggested_events)} events)", intent=intent)
             return resp
+
         except Exception as e:
             response = f"Fehler beim Erstellen der Kalender-Einträge: {e}"
             logging.error(f"[Chat] Calendar entry creation failed: {e}")
+            end_turn(timer, bot_message=response, intent=intent)
             return {"response": response}
+
     elif intent == "calendar_no":
         # clear awaiting flag for this user
         with state_lock:
             if username in conversation_state:
                 del conversation_state[username]
-        return {"response": "Alles klar. Mit was kann ich dir sonst helfen?"}
+        msg = "Alles klar. Mit was kann ich dir sonst helfen?"
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
     else:
+<<<<<<< HEAD
         return {"response": "Entschuldigung, ich habe dich nicht verstanden. Du kannst nach Moodle-Terminen fragen oder den Klausur-Wizard starten."}
+=======
+        msg = "Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen."
+        end_turn(timer, bot_message=msg, intent=intent)
+        return {"response": msg}
+
+>>>>>>> a4b0068 (Update project files)
 
 
 @app.get("/health")

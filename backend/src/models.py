@@ -8,6 +8,8 @@ class ChatRequest(BaseModel):
     username: str
     password: str
     api_key: Optional[str] = None
+    conv_id: Optional[str] = None
+    client_ts: Optional[str] = None
 
 
 class CredentialsSaveRequest(BaseModel):
