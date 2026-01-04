@@ -9,6 +9,7 @@ import time
 import threading
 import sys
 import webbrowser
+import re
 
 # Import modules
 from src.models import ChatRequest, CredentialsSaveRequest, CredentialsResponse
@@ -170,14 +171,20 @@ def _parse_topics_list(text: str):
 
 
 def _is_negative_response(text: str):
-    """Check if user response is a rejection/negative response."""
+    """Check if user response signals no/none; avoid substring false positives."""
     lowered = text.strip().lower()
-    negative_keywords = [
-        "nein", "no", "ne", "nope", "kein", "keine", "nicht",
+    # Single-word tokens must match whole words to avoid catching words like "linear"
+    token_keywords = ["nein", "no", "nope", "kein", "keine", "nö"]
+    # Phrases are matched as substrings
+    phrase_keywords = [
         "gar keine", "mir egal", "egal", "alle", "alles", "alle themen",
-        "keine ahnung", "weiß nicht", "keine idee", "keine spezifischen"
+        "keine ahnung", "weiß nicht", "keine idee", "keine spezifischen", "kein topic",
     ]
-    for kw in negative_keywords:
+
+    for kw in token_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", lowered):
+            return True
+    for kw in phrase_keywords:
         if kw in lowered:
             return True
     return False
@@ -372,6 +379,16 @@ async def chat(request: ChatRequest):
     wizard_active = bool(wizard_state and wizard_state.get('active'))
     msg_low = request.message.strip().lower()
     stop_keywords = ("exit")
+
+    # Allow global exit to always cancel the wizard, regardless of current state
+    if msg_low.strip() == "exit":
+        with state_lock:
+            user_state = conversation_state.get(username, {})
+            user_state.pop('wizard', None)
+            user_state['ts'] = time.time()
+            conversation_state[username] = user_state
+        end_turn(timer, bot_message="Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", intent="stop_exam_wizard")
+        return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
 
     # If the bot previously asked about adding to calendar, interpret simple yes/no locally
     intent = None
