@@ -3,7 +3,7 @@ import asyncio
 import datetime
 import logging
 import os
-from typing import Optional
+from typing import Optional, List
 
 
 
@@ -34,7 +34,7 @@ def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst und keine Rückfragen stellt."},
             {"role": "user", "content": " Nutze Markdown. Überschriften mit ##, fettgedruckte Labels mit **, und Aufzählungen mit -.\n"
-             " Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen: " +  latestMessage }
+             " Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen, z.B. zeitlich oder fachlich. Dabei muss alles was nicht eine sinnvolle Einschränkung der Stine Prüfugen ist ignoriert werden." +  latestMessage }
         ]
     )
     # Normalize the response text and append the calendar question (same wording used elsewhere)
@@ -63,7 +63,7 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
         " Unterscheide zwischen endenden und beginnenden Terminen.\n\n"
         " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf.\n\n"
         " WICHTIG: Beachte potentielle terminliche oder fachliche Einschränkungen in folgender Nutzereingabe.\n\n"
-        "(z.B. Nur Termine für ein bestimmtes Modul oder nur Termine in den nächsten 3 Tagen oder ähnliches. Andere Wünsche in der Nutzeringabe können ignoriert werden).\n\n"
+        "(z.B. Nur Termine für ein bestimmtes Modul oder nur Termine in den nächsten 3 Tagen oder ähnliches. Andere Wünsche in der Nutzeringabe können ignoriert werden). Insbesondere muss alles was nicht direkt den Moodle terminen zu tun hat ignoriert werden.\n\n"
         " Hier die Nutzereingabe: " + latestMessage
     )
     response = client.chat.completions.create(
@@ -153,9 +153,11 @@ def ask_chatgpt_topic_help(module: str, topic: str, materials: str, user_questio
     return response.choices[0].message.content
 
 
-async def determine_intent(message: str, api_key: Optional[str]) -> str:
-    """Asynchronously determine the user's intent using ChatGPT.
+async def determine_intent(message: str, api_key: Optional[str]) -> List[str]:
+    """Asynchronously determine one or more user intents using ChatGPT.
 
+    Returns a list of intent labels in the order they should be executed.
+    If only a single intent is detected, a single-item list is returned.
     Retries on transient errors to be more robust when many requests arrive quickly.
     """
     msg = message.strip()
@@ -181,26 +183,13 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
     ]
 
     prompt = (
-        "Classify the user's message into exactly one of the following intent labels: "
+        "Classify the user's message into zero or more of the following intent labels (in order of priority/execution): "
         + ", ".join(labels)
-        + ".\nRespond with only the intent label (one of the labels) and nothing else.\n"
-        + "If the user asks about Moodle appointments, deadlines or 'Aufgaben', return 'get_moodle_appointments'.\n"
-        + "If the user asks about Stine messages or 'Stine Nachrichten', return 'get_stine_messages'.\n"
-        + "If the user asks about Stine exams or 'Stine Prüfungen', return 'get_stine_exams'.\n"
-        + "If the user asks about email or 'E-Mail', return 'get_mail'.\n"
-        + "If the message is a greeting (hello, hi, hallo) return 'greeting'.\n"
-        + "If the user asks for help or how to use the bot return 'help'.\n"
-        + "If the user replies with an affirmative like 'ja' (German) or 'yes', return 'calendar_yes'.\n"
-        + "If the user replies with a negative like 'nein' (German) or 'no', return 'calendar_no'.\n"
-        + "If the user wants to start exam prep (e.g., Klausurvorbereitung, Lernplan, Wizard starten), return 'start_exam_wizard'.\n"
-        + "If the user wants to stop or exit the exam prep wizard, return 'stop_exam_wizard'.\n"
-        + "If the user provides module names, return 'wizard_pick_module'.\n"
-        + "If the user lists topics/chapters, return 'wizard_pick_topics'.\n"
-        + "If the user chooses or asks for the learning order, return 'wizard_pick_order'.\n"
-        + "If the user provides uploads/links/material, return 'wizard_collect_materials'.\n"
-        + "If the user says they have/no questions or wants explanation/Übungen, return 'wizard_questions_or_walkthrough'.\n"
-        + "If the user continues within the wizard (follow-ups), return 'wizard_followup'.\n"
-        + f"User message: \"{msg}\"\n"
+        + ".\nRespond with a comma-separated list of intent labels (e.g. get_moodle_appointments,get_mail)."
+        + " If you detect only one intent, return a single label. If you detect none, return 'unknown'."
+        + " Do NOT include any extra text or explanation — only the comma-separated labels.\n"
+        + "Guidance: If the user asked about multiple things in one message (e.g., 'Welche Termine habe ich und zeig mir meine Prüfungen'), return both 'get_moodle_appointments' and 'get_stine_exams' in the order the user mentioned them."
+        + f" User message: \"{msg}\"\n"
     )
 
     # Blocking call will run in a thread to avoid blocking the event loop.
@@ -224,15 +213,25 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
     for attempt in range(1, max_retries + 1):
         try:
             response = await asyncio.to_thread(_call_openai, prompt)
-            # parse the model response robustly
-            intent_text = response.strip().splitlines()[0].strip() if response else ""
-            if intent_text in labels:
-                return intent_text
-            for lab in labels:
-                if lab in response:
-                    return lab
-            logging.info("ChatGPT returned unexpected intent text (attempt %d): %s", attempt, response)
-            # If model returned something unexpected, retry a couple times
+            # parse the model response as a comma-separated list of labels
+            raw = (response or "").strip()
+            # take first line only
+            raw_first = raw.splitlines()[0] if raw else ""
+            # split on commas or semicolons or newlines
+            parts = [p.strip() for p in re.split(r"[,;\n]+", raw_first) if p.strip()]
+            detected: List[str] = []
+            for p in parts:
+                if p in labels:
+                    detected.append(p)
+                else:
+                    # try to find a known label substring inside p
+                    for lab in labels:
+                        if lab in p:
+                            detected.append(lab)
+                            break
+            if detected:
+                return detected
+            logging.info("determine_intent: ChatGPT returned unexpected intent text (attempt %d): %s", attempt, response)
         except Exception as e:
             logging.warning("Attempt %d: Error calling ChatGPT for intent detection: %s", attempt, e)
 

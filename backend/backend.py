@@ -498,32 +498,32 @@ async def chat(request: ChatRequest):
             intent = "stop_exam_wizard"
 
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
-    if intent is None:
-        # Check for settings/reminders
-        if any(word in msg_low for word in ["einstellung", "erinnerung", "benachrichtigung", "notification", "settings", "reminder"]):
-            intent = "settings"
-        elif any(word in msg_low for word in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
-            intent = "start_exam_wizard"
-        elif any(msg_low.strip() == kw for kw in stop_keywords):
-            intent = "stop_exam_wizard"
-        # Check for common Moodle-related keywords
-        elif any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
-            intent = "get_moodle_appointments"
-        # Check for Stine exam keywords
-        elif any(word in msg_low for word in ["prüfung", "klausur", "exam"]):
-            intent = "get_stine_exams"
-        # Check for Stine messages
-        elif "nachricht" in msg_low and "stine" in msg_low:
-            intent = "get_stine_messages"
-        # Check for email
-        elif any(word in msg_low for word in ["mail", "e-mail", "email"]):
-            intent = "get_mail"
-        # Check for greetings
-        elif any(word in msg_low for word in ["hallo", "hi", "hey", "guten tag", "servus"]):
-            intent = "greeting"
-        # Check for help
-        elif any(word in msg_low for word in ["hilfe", "help", "wie funktioniert", "was kannst du"]):
-            intent = "help"
+    # if intent is None:
+    #     # Check for settings/reminders
+    #     if any(word in msg_low for word in ["einstellung", "erinnerung", "benachrichtigung", "notification", "settings", "reminder"]):
+    #         intent = "settings"
+    #     elif any(word in msg_low for word in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
+    #         intent = "start_exam_wizard"
+    #     elif any(msg_low.strip() == kw for kw in stop_keywords):
+    #         intent = "stop_exam_wizard"
+    #     # Check for common Moodle-related keywords
+    #     elif any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
+    #         intent = "get_moodle_appointments"
+    #     # Check for Stine exam keywords
+    #     elif any(word in msg_low for word in ["prüfung", "klausur", "exam"]):
+    #         intent = "get_stine_exams"
+    #     # Check for Stine messages
+    #     elif "nachricht" in msg_low and "stine" in msg_low:
+    #         intent = "get_stine_messages"
+    #     # Check for email
+    #     elif any(word in msg_low for word in ["mail", "e-mail", "email"]):
+    #         intent = "get_mail"
+    #     # Check for greetings
+    #     elif any(word in msg_low for word in ["hallo", "hi", "hey", "guten tag", "servus"]):
+    #         intent = "greeting"
+    #     # Check for help
+    #     elif any(word in msg_low for word in ["hilfe", "help", "wie funktioniert", "was kannst du"]):
+    #         intent = "help"
 
     # If no keyword match, use LLM for intent detection
     if intent is None:
@@ -544,6 +544,150 @@ async def chat(request: ChatRequest):
     logging.info(f"[Chat] Has password: {bool(request.password)}")
 
     wizard_step_intents = set(WIZARD_INTENT_STEPS.keys())
+    
+    # If the LLM returned multiple intents (list), handle them sequentially and
+    # return a combined textual response. Keep wizard intents as priority.
+    if isinstance(intent, list):
+        intents = intent
+        # Drop calendar confirmations if they were not actually asked for
+        if any(i in ("calendar_yes", "calendar_no") for i in intents):
+            if not (state and state.get('awaiting_calendar')):
+                intents = [i for i in intents if i not in ("calendar_yes", "calendar_no")]
+        if not intents:
+            intents = ["unknown"]
+        # Wizard priority: if any wizard intent present, keep only first wizard intent
+        wizard_matches = [i for i in intents if i in wizard_step_intents]
+        if wizard_matches:
+            intents = [wizard_matches[0]]
+
+        parts = []
+        suggested_events = None
+
+        for cur in intents:
+            # Reuse existing logic but accumulate results
+            if cur == "start_exam_wizard":
+                base_state = state or {}
+                wizard = _new_wizard_state()
+                with state_lock:
+                    conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
+                parts.append("Gern helfe ich dir bei der Klausurvorbereitung.\n\n Du kannst den Vorbereitungs-Wizard jederzeit mit 'exit' abbrechen.\n\n Damit ich dir helfen kann, muss ich dir zunächst ein paar Fragen stellen.\n 1. Um welches Modul geht es?")
+                continue
+
+            if cur == "stop_exam_wizard":
+                with state_lock:
+                    user_state = conversation_state.get(username, {})
+                    user_state.pop('wizard', None)
+                    user_state['ts'] = time.time()
+                    conversation_state[username] = user_state
+                parts.append("Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.")
+                continue
+
+            if cur in wizard_step_intents:
+                if not wizard_active:
+                    base_state = state or {}
+                    wizard = _new_wizard_state()
+                    with state_lock:
+                        conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
+                    parts.append("Ich starte den Klausur-Wizard. Welches Modul?")
+                    continue
+                wizard_response = _handle_wizard_message(username, request.message, state or {}, api_key)
+                if wizard_response:
+                    parts.append(wizard_response)
+                    continue
+
+            if cur == "get_moodle_appointments":
+                try:
+                    cached_data, cached_response = get_cached_scraped_data(username, 'moodle')
+                    if cached_data:
+                        logging.info("[Chat] Using cached Moodle scraped data; re-running LLM to apply user message")
+                        termine = cached_data
+                        response = ask_chatgpt_moodle(termine, api_key)
+                    else:
+                        termine = scrape_moodle_text(request.username, request.password)
+                        if any(error_keyword in termine for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
+                            parts.append("Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal.")
+                            continue
+                        response = ask_chatgpt_moodle(termine, api_key)
+                        cache_scraped_data(username, 'moodle', termine, response)
+                    if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
+                        with state_lock:
+                            conversation_state[username] = {'awaiting_calendar': True, 'raw_termine': termine, 'ts': time.time()}
+                    parts.append(response)
+                    continue
+                except Exception as e:
+                    parts.append(f"Fehler beim Abrufen: {e}")
+                    continue
+
+            if cur == "get_stine_messages":
+                parts.append("Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert.")
+                continue
+
+            if cur == "get_stine_exams":
+                try:
+                    cached_data, cached_response = get_cached_scraped_data(username, 'stine_exams')
+                    if cached_data:
+                        logging.info("[Chat] Using cached STINE scraped data; re-running LLM to apply user message")
+                        exams_text = cached_data
+                        response = ask_chatgpt_exams(exams_text, api_key)
+                    else:
+                        exams_text = scrape_stine_exams(request.username, request.password)
+                        if any(error_keyword in exams_text for error_keyword in ["Fehler", "nicht verfügbar", "Selenium", "WebDriver", "Chrome", "Failed", "Exception"]):
+                            parts.append("STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal.")
+                            continue
+                        response = ask_chatgpt_exams(exams_text, api_key)
+                        cache_scraped_data(username, 'stine_exams', exams_text, response)
+                    if response and "Soll ich dir die Termine auch in deinen Kalender eintragen?" in response:
+                        with state_lock:
+                            conversation_state[username] = {'awaiting_calendar': True, 'raw_termine': exams_text, 'ts': time.time()}
+                    parts.append(response)
+                    continue
+                except Exception as e:
+                    parts.append(f"Fehler beim Abrufen der Stine-Prüfungen: {e}")
+                    continue
+
+            if cur == "greeting":
+                parts.append("Hallo! Wie kann ich dir helfen?")
+                continue
+
+            if cur == "help":
+                parts.append("Ich kann dir bei folgenden Dingen helfen:\n\n- Moodle-Termine und Deadlines abrufen\n- Stine-Prüfungstermine abrufen\n- Erinnerungseinstellungen konfigurieren\n- Kalendertermine hinzufügen\n - dich bei der Klausurvorbereitung unterstützen\n\n")
+                continue
+
+            if cur == "calendar_yes":
+                termine = None
+                with state_lock:
+                    if username in conversation_state:
+                        state = conversation_state[username]
+                        termine = state.get('raw_termine', '')
+                        del conversation_state[username]
+                if not termine:
+                    parts.append("Fehler: Keine Termine verfügbar. Bitte erneut anfragen.")
+                    continue
+                try:
+                    _, ics_content = make_calendar_entries(termine, api_key)
+                    suggested_events = extract_events_from_ics(ics_content)
+                    # For multi-intent flow, append a short notice; return suggested_events as extra field below
+                    parts.append(f"Vorgeschlagene {len(suggested_events)} Kalender-Einträge erstellt.")
+                    continue
+                except Exception as e:
+                    parts.append(f"Fehler beim Erstellen der Kalender-Einträge: {e}")
+                    continue
+
+            if cur == "calendar_no":
+                with state_lock:
+                    if username in conversation_state:
+                        del conversation_state[username]
+                parts.append("Alles klar. Mit was kann ich dir sonst helfen?")
+                continue
+
+            # default unknown
+            parts.append("Entschuldigung, ich habe dich nicht verstanden. Bitte frage nach Moodle-Terminen.")
+
+        final_text = "\n\n---\n\n".join(parts) if parts else ""
+        resp = {"response": final_text, "responses": parts}
+        if suggested_events is not None:
+            resp["suggested_events"] = suggested_events
+        return resp
     
     # Route based on detected intent
     if intent == "start_exam_wizard":
@@ -581,10 +725,10 @@ async def chat(request: ChatRequest):
         try:
             # Check cache first for scraped data AND ChatGPT response
             cached_data, cached_response = get_cached_scraped_data(username, 'moodle')
-            if cached_data and cached_response:
-                logging.info("[Chat] Using cached Moodle data and response")
+            if cached_data:
+                logging.info("[Chat] Using cached Moodle scraped data; re-running LLM to apply user message")
                 termine = cached_data
-                response = cached_response
+                response = ask_chatgpt_moodle(termine, api_key)
             else:
                 # Cache miss - scrape and cache the data
                 logging.info("[Chat] Cache miss - starting Moodle scraper")
@@ -633,10 +777,10 @@ async def chat(request: ChatRequest):
         try:
             # Check cache first for scraped data AND ChatGPT response
             cached_data, cached_response = get_cached_scraped_data(username, 'stine_exams')
-            if cached_data and cached_response:
-                logging.info("[Chat] Using cached STINE data and response")
+            if cached_data:
+                logging.info("[Chat] Using cached STINE scraped data; re-running LLM to apply user message")
                 exams_text = cached_data
-                response = cached_response
+                response = ask_chatgpt_exams(exams_text, api_key)
             else:
                 # Cache miss - scrape and cache the data
                 exams_text = scrape_stine_exams(request.username, request.password)
