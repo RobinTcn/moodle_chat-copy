@@ -168,6 +168,20 @@ def _parse_topics_list(text: str):
     return topics
 
 
+def _is_negative_response(text: str):
+    """Check if user response is a rejection/negative response."""
+    lowered = text.strip().lower()
+    negative_keywords = [
+        "nein", "no", "ne", "nope", "kein", "keine", "nicht",
+        "gar keine", "mir egal", "egal", "alle", "alles", "alle themen",
+        "keine ahnung", "weiß nicht", "keine idee", "keine spezifischen"
+    ]
+    for kw in negative_keywords:
+        if kw in lowered:
+            return True
+    return False
+
+
 def _pick_topic_from_input(user_text: str, topics):
     if not topics:
         return None
@@ -204,17 +218,30 @@ def _handle_wizard_message(username: str, message: str, state: dict, api_key: st
         response = f"Alles klar, Modul '{msg}'.\n\n Geht es für dich um ein oder mehrere bestimmte Themen oder Kapitel? Bitte liste diese auf, getrennt durch Kommas."
 
     elif step == WIZARD_STEP_PICK_TOPICS:
-        topics = _parse_topics_list(msg)
-        if not topics:
-            response = "Ich habe keine Themen erkannt. Bitte liste die Themen oder Kapitel, getrennt durch Kommas oder Zeilenumbrüche."
-        else:
-            wizard['topics'] = topics
-            wizard['step'] = WIZARD_STEP_PICK_ORDER
-            topic_list = "\n- " + "\n- ".join(topics)
+        # Check if user explicitly said "no" or doesn't want to specify topics
+        if _is_negative_response(msg):
+            # User doesn't want to specify topics - use the module name as single topic
+            wizard['topics'] = [wizard.get('module', 'Allgemein')]
+            wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
+            wizard['current_topic'] = wizard['topics'][0]
+            wizard['order'] = wizard['topics']
+            wizard['order_index'] = 0
             response = (
-                f"Verstanden. Ich habe diese Themen gespeichert:{topic_list}\n\n"
-                "Mit was möchtest du anfangen? Wenn du unsicher bist, schreibe 'Vorschlag', dann schlage ich eine Reihenfolge vor."
+                f"Alles klar, dann arbeiten wir über das ganze Modul. Lade gerne Folien, Aufgaben oder Altklausuren hoch oder beschreibe den Stoff kurz.\n\n"
+                "Wenn du das gerade nicht möchtest, schreibe 'kein upload'."
             )
+        else:
+            topics = _parse_topics_list(msg)
+            if not topics:
+                response = "Ich habe keine Themen erkannt. Bitte liste die Themen oder Kapitel, getrennt durch Kommas oder Zeilenumbrüche."
+            else:
+                wizard['topics'] = topics
+                wizard['step'] = WIZARD_STEP_PICK_ORDER
+                topic_list = "\n- " + "\n- ".join(topics)
+                response = (
+                    f"Verstanden. Ich habe diese Themen gespeichert:{topic_list}\n\n"
+                    "Mit was möchtest du anfangen? Wenn du unsicher bist, schreibe 'Vorschlag', dann schlage ich eine Reihenfolge vor."
+                )
 
     elif step == WIZARD_STEP_PICK_ORDER:
         topics = wizard.get('topics', [])
@@ -588,11 +615,16 @@ async def chat(request: ChatRequest):
                 'settings_step': 'ask_task_days',
                 'ts': time.time()
             }
-        return {"response": "Lass uns deine Erinnerungseinstellungen konfigurieren! \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"}
+        return {"response": "**Lass uns deine Erinnerungseinstellungen konfigurieren!** \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"}
     elif intent == "greeting":
-        return {"response": "Hallo! Ich kann dir bei Moodle-Terminen helfen. Frag z. B. 'Welche Termine habe ich?'"}
+        return {"response": "Hallo! Wie kann ich dir helfen?"}
     elif intent == "help":
-        return {"response": f"Du kannst nach 'Terminen' fragen. \n Formuliere z. B. 'Was sind meine Termine?'"}
+        return {"response": f"Ich kann dir bei folgenden Dingen helfen:\n\n"
+                         "- Moodle-Termine und Deadlines abrufen\n"
+                         "- Stine-Prüfungstermine abrufen\n"
+                         "- Erinnerungseinstellungen konfigurieren\n"
+                         "- Kalendertermine hinzufügen\n"
+                         " - dich bei der Klausurvorbereitung unterstützen\n\n"}
     elif intent == "calendar_yes":
         # proceed to create calendar entries
         termine = None
@@ -630,7 +662,7 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         return {"response": "Alles klar. Mit was kann ich dir sonst helfen?"}
     else:
-        return {"response": "Entschuldigung, ich habe dich nicht verstanden. Du kannst nach Moodle-Terminen fragen oder den Klausur-Wizard starten."}
+        return {"response": "Entschuldigung, ich habe dich nicht verstanden. Du erhälst eine Auflistung meiner Funktionen, wenn du 'Hilfe' schreibst."}
 
 
 @app.get("/health")

@@ -7,13 +7,20 @@ import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import 'katex/dist/katex.min.css';
-import { ChatResponse } from './ChatResponse';
+import { ChatResponse, CalendarEventSuggestion } from './ChatResponse';
 import BottomNav from './BottomNav';
 import Calendar from './Calendar';
+
+declare global {
+  interface Window {
+    addCalendarEvent: (date: string, title: string) => void;
+  }
+}
 
 interface Message {
   sender: "user" | "bot";
   text: string;
+  suggestedEvents?: CalendarEventSuggestion[];
 }
 
 // Render bot messages: allow raw HTML (buttons), Markdown headings, math via KaTeX.
@@ -181,14 +188,13 @@ function App() {
         }
       }
 
-      // If the backend returned suggested events, append them as clickable buttons
+      // If the backend returned suggested events, create a message with buttons
       if (res.data && res.data.suggested_events && res.data.suggested_events.length > 0) {
-        const eventsHtml = res.data.suggested_events.map(evt => {
-          const dateStr = new Date(evt.date).toLocaleDateString('de-DE', { year: 'numeric', month: 'long', day: 'numeric' });
-          return `<div style="display:inline-block; margin:4px 4px 4px 0; padding:8px 12px; background:#4CAF50; color:white; border-radius:4px; cursor:pointer;" onclick="window.addCalendarEvent('${evt.date}', '${evt.title.replace(/'/g, "\\'")}')" title="Zum Kalender hinzufügen">${evt.title} (${dateStr})</div>`;
-        }).join('');
-        const suggestedHtml = `<div style="margin-top:8px"><strong>Welche Termine soll ich zum Kalender hinzufügen?</strong><div style="margin-top:6px">${eventsHtml}</div></div>`;
-        setMessages(prev => [...prev, { sender: "bot", text: suggestedHtml }]);
+        setMessages(prev => [...prev, { 
+          sender: "bot", 
+          text: "Welche Termine soll ich zum Kalender hinzufügen?",
+          suggestedEvents: res.data.suggested_events
+        }]);
       }
     } catch {
       setMessages(prev => {
@@ -235,11 +241,30 @@ function App() {
         {selectedTab === "chat" && (
           <div>
             {messages.map((m,i)=>(
-              <div key={i} className={`flex mb-2 ${m.sender==="user"?"justify-end":"justify-start"}`}>
+              <div key={i} className={`flex mb-4 ${m.sender==="user"?"justify-end":"justify-start"}`}>
                 <div className={`rounded-lg p-3 max-w-[60%] md:max-w-[50%] lg:max-w-[40%] ${m.sender==="user"?"bg-green-500 text-white":darkMode?"bg-gray-700 text-white":"bg-gray-300 text-black"}`}>
                   {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
                   {m.sender === "bot" ? (
-                    renderMarkup(m.text)
+                    <>
+                      {renderMarkup(m.text)}
+                      {m.suggestedEvents && m.suggestedEvents.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {m.suggestedEvents.map((evt, idx) => {
+                            const dateStr = new Date(evt.date).toLocaleDateString('de-DE', { year: 'numeric', month: 'long', day: 'numeric' });
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => window.addCalendarEvent(evt.date, evt.title)}
+                                className="inline-block px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
+                                title="Zum Kalender hinzufügen"
+                              >
+                                {evt.title} ({dateStr})
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     // Render user message as plain text to avoid accidental HTML rendering
                     <div>{m.text}</div>

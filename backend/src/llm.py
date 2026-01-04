@@ -33,11 +33,12 @@ def ask_chatgpt_exams(exams_text: str, api_key: Optional[str]) -> str:
         model="gpt-5-mini",
         messages=[
             {"role": "system", "content": "Du bist ein hilfreicher Assistent, der Stine-Prüfungen für den Benutzer zusammenfasst und keine Rückfragen stellt."},
-            {"role": "user", "content": "Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen: " +  latestMessage }
+            {"role": "user", "content": " Nutze Markdown. Überschriften mit ##, fettgedruckte Labels mit **, und Aufzählungen mit -.\n"
+             " Hier sind meine Stine-Prüfungen:\n" + exams_text + " Hier sind Einschränkungen die beachtet werden sollen: " +  latestMessage }
         ]
     )
     # Normalize the response text and append the calendar question (same wording used elsewhere)
-    resp_text = response.choices[0].message.content + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    resp_text = response.choices[0].message.content + "\n\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
     return resp_text
 
 
@@ -55,14 +56,15 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
 
     client = OpenAI(api_key=key)
     user_message = (
-        "Hier sind meine Moodle-Aufgaben:\n" + termine 
-        + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() 
-        + ". Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an."
-        + " Unterscheide zwischen endenden und beginnenden Terminen."
-        + " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf."
-        + " WICHTIG: Beachte potentielle terminliche oder fachliche Einschränkungen in folgender Nutzereingabe."
-        + "(z.B. Nur Termine für ein bestimmtes Modul oder nur Termine in den nächsten 3 Tagen oder ähnliches. Andere Wünsche in der Nutzeringabe können ignoriert werden)"
-        + "Hier die Nutzereingabe: " + latestMessage
+        " Nutze Markdown. Überschriften mit ##, fettgedruckte Labels mit **, und Aufzählungen mit -.\n"
+        " Hier sind meine Moodle-Aufgaben:\n" + termine + "\n\n"
+        + "Beginne die Nachricht mit 'Hier sind deine Moodle-Aufgaben:'. Heute ist der " + datetime.date.today().isoformat() + ".\n\n"
+        " Nenne die Termine abhängig vom heutigen Datum (z.B. 'morgen', 'in zwei Tagen'). Gib auch immer das jeweilige Modul für die Termine an.\n\n"
+        " Unterscheide zwischen endenden und beginnenden Terminen.\n\n"
+        " WICHTIG: Auch wenn mehrere Termine das selbe Datum haben, liste jeden Termin einzeln auf.\n\n"
+        " WICHTIG: Beachte potentielle terminliche oder fachliche Einschränkungen in folgender Nutzereingabe.\n\n"
+        "(z.B. Nur Termine für ein bestimmtes Modul oder nur Termine in den nächsten 3 Tagen oder ähnliches. Andere Wünsche in der Nutzeringabe können ignoriert werden).\n\n"
+        " Hier die Nutzereingabe: " + latestMessage
     )
     response = client.chat.completions.create(
         model="gpt-5-mini",
