@@ -4,6 +4,11 @@ import os
 import time
 import uuid
 import hashlib
+import re
+import getpass
+import platform
+from datetime import datetime
+from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,12 +20,23 @@ def _utc_iso() -> str:
 
 
 def _config_dir() -> Path:
-    # passt zu eurem Projekt (siehe credentials.py)
     return Path.home() / ".config" / "studibot"
 
 
-def _log_path() -> Path:
-    return _config_dir() / "eval_chat_log.jsonl"
+def _log_path(conv_id: Optional[str] = None) -> Path:
+    # Zeitstempel für "pro Session / Start"
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Nutzer/Host nur als Info (optional)
+    user = re.sub(r"[^A-Za-z0-9._-]+", "_", getpass.getuser())
+    host = re.sub(r"[^A-Za-z0-9._-]+", "_", platform.node())
+
+    # conv_id kurz machen 
+    conv = (conv_id or "unknown").strip()
+    conv_safe = re.sub(r"[^A-Za-z0-9._-]+", "_", conv)
+    conv_short = conv_safe[:8]  # z.B. 05da097b statt ganze UUID
+
+    return _config_dir() / f"eval_{ts}__{user}@{host}__conv-{conv_short}.jsonl"
 
 
 def _pseudonymize_user(username: str) -> str:
@@ -34,7 +50,10 @@ def _pseudonymize_user(username: str) -> str:
 
 
 def _append_jsonl(record: dict[str, Any]) -> None:
-    path = _log_path()
+    conv_id = record.get("conv_id")
+    path = _log_path(record.get("conv_id"))
+
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")

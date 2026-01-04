@@ -66,6 +66,18 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const backendBase = "http://127.0.0.1:8000";
 
+  const CONV_KEY = "studibot_conv_id";
+  const newConvId = () =>
+    (crypto as any)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const [convId, setConvId] = useState<string>(() => {
+    const existing = localStorage.getItem(CONV_KEY);
+    if (existing) return existing;
+    const fresh = newConvId();
+    localStorage.setItem(CONV_KEY, fresh);
+    return fresh;
+  });
+
   // Persist dark mode preference
   useEffect(() => {
     localStorage.setItem('darkMode', JSON.stringify(darkMode));
@@ -164,7 +176,11 @@ function App() {
         message: userMessage,
         username,
         password,
-        api_key: apiKey
+        api_key: apiKey,
+
+        // logging / session tracking
+        conv_id: convId,
+        client_ts: new Date().toISOString(),
       });
       // Replace the typing indicator (last message) with the real response
       // Only add response message if response text is provided
