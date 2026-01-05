@@ -28,7 +28,8 @@ def _utc_iso() -> str:
 
 
 def _config_dir() -> Path:
-    return Path.home() / ".config" / "studibot"
+    # Logs im "logs" Ordner im Projekt-Root speichern
+    return Path(__file__).parent.parent / "logs"
 
 
 def _safe_id(s: str, max_len: int = 32) -> str:
