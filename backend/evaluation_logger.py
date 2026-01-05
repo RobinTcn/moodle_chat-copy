@@ -1,4 +1,3 @@
-# evaluation_logger.py
 import json
 import os
 import time
@@ -7,12 +6,21 @@ import hashlib
 import re
 import getpass
 import platform
-from datetime import datetime
-from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
+
+# Cache: (conv_id, session_id) -> Path (damit pro Session nur eine Datei entsteht)
+_SESSION_LOG_PATHS: dict[tuple[str, str], Path] = {}
+
+# Fallback: wenn niemand eine session_id übergibt, bleibt es pro Prozess eine Session
+_DEFAULT_SESSION_ID = os.getenv("STUDIBOT_SESSION_ID") or str(uuid.uuid4())
+
+
+def new_session_id() -> str:
+    """Beim Öffnen eines Chats einmal aufrufen und dann bei jeder Nachricht mitschicken."""
+    return str(uuid.uuid4())
 
 
 def _utc_iso() -> str:
@@ -23,20 +31,32 @@ def _config_dir() -> Path:
     return Path.home() / ".config" / "studibot"
 
 
-def _log_path(conv_id: Optional[str] = None) -> Path:
-    # Zeitstempel für "pro Session / Start"
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+def _safe_id(s: str, max_len: int = 32) -> str:
+    s = (s or "unknown").strip()
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
+    return s[:max_len] if max_len else s
 
-    # Nutzer/Host nur als Info (optional)
-    user = re.sub(r"[^A-Za-z0-9._-]+", "_", getpass.getuser())
-    host = re.sub(r"[^A-Za-z0-9._-]+", "_", platform.node())
 
-    # conv_id kurz machen 
-    conv = (conv_id or "unknown").strip()
-    conv_safe = re.sub(r"[^A-Za-z0-9._-]+", "_", conv)
-    conv_short = conv_safe[:8]  # z.B. 05da097b statt ganze UUID
+def _log_path(conv_id: str, session_id: str) -> Path:
+    conv_safe = _safe_id(conv_id, max_len=48)
+    sess_safe = _safe_id(session_id, max_len=48)
 
-    return _config_dir() / f"eval_{ts}__{user}@{host}__conv-{conv_short}.jsonl"
+    key = (conv_safe, sess_safe)
+    if key in _SESSION_LOG_PATHS:
+        return _SESSION_LOG_PATHS[key]
+
+    # Einmaliger Zeitstempel PRO SESSION (nicht pro Nachricht)
+    session_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    user = _safe_id(getpass.getuser(), max_len=48)
+    host = _safe_id(platform.node(), max_len=80)
+
+    conv_short = conv_safe[:12]
+    sess_short = sess_safe[:8]
+
+    path = _config_dir() / f"eval_{session_ts}__{user}@{host}__conv-{conv_short}__sess-{sess_short}.jsonl"
+    _SESSION_LOG_PATHS[key] = path
+    return path
 
 
 def _pseudonymize_user(username: str) -> str:
@@ -50,11 +70,12 @@ def _pseudonymize_user(username: str) -> str:
 
 
 def _append_jsonl(record: dict[str, Any]) -> None:
-    conv_id = record.get("conv_id")
-    path = _log_path(record.get("conv_id"))
+    conv_id = record.get("conv_id") or "unknown"
+    session_id = record.get("session_id") or _DEFAULT_SESSION_ID
 
-
+    path = _log_path(conv_id, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -62,14 +83,25 @@ def _append_jsonl(record: dict[str, Any]) -> None:
 @dataclass
 class TurnTimer:
     conv_id: str
+    session_id: str
     turn_id: str
     user_id: str
     ts_user: str
     t0: float  # perf_counter start
 
 
-def start_turn(username: str, conv_id: Optional[str] = None, user_message: Optional[str] = None) -> TurnTimer:
+def start_turn(
+    username: str,
+    conv_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_message: Optional[str] = None
+) -> TurnTimer:
+    # conv_id = "Conversation" (kann stabil sein)
     conv = conv_id or str(uuid.uuid4())
+
+    # session_id = "Chat-Öffnung" (muss pro Öffnung neu sein!)
+    sess = session_id or _DEFAULT_SESSION_ID
+
     turn = str(uuid.uuid4())
     user_id = _pseudonymize_user(username)
     ts_user = _utc_iso()
@@ -78,6 +110,7 @@ def start_turn(username: str, conv_id: Optional[str] = None, user_message: Optio
         _append_jsonl({
             "event": "user_message",
             "conv_id": conv,
+            "session_id": sess,
             "turn_id": turn,
             "user_id": user_id,
             "ts": ts_user,
@@ -85,7 +118,14 @@ def start_turn(username: str, conv_id: Optional[str] = None, user_message: Optio
             "text_len": len(user_message),
         })
 
-    return TurnTimer(conv_id=conv, turn_id=turn, user_id=user_id, ts_user=ts_user, t0=time.perf_counter())
+    return TurnTimer(
+        conv_id=conv,
+        session_id=sess,
+        turn_id=turn,
+        user_id=user_id,
+        ts_user=ts_user,
+        t0=time.perf_counter()
+    )
 
 
 def end_turn(timer: TurnTimer, bot_message: str, intent: Optional[str] = None) -> dict[str, Any]:
@@ -95,6 +135,7 @@ def end_turn(timer: TurnTimer, bot_message: str, intent: Optional[str] = None) -
     record = {
         "event": "assistant_message",
         "conv_id": timer.conv_id,
+        "session_id": timer.session_id,
         "turn_id": timer.turn_id,
         "user_id": timer.user_id,
         "ts": ts_bot,
@@ -104,4 +145,10 @@ def end_turn(timer: TurnTimer, bot_message: str, intent: Optional[str] = None) -
         "text_len": len(bot_message),
     }
     _append_jsonl(record)
-    return {"conv_id": timer.conv_id, "turn_id": timer.turn_id, "ts": ts_bot, "duration_ms": duration_ms}
+    return {
+        "conv_id": timer.conv_id,
+        "session_id": timer.session_id,
+        "turn_id": timer.turn_id,
+        "ts": ts_bot,
+        "duration_ms": duration_ms
+    }
