@@ -492,7 +492,7 @@ async def chat(request: ChatRequest):
 
     # Quick keywords for starting the wizard without LLM
     if intent is None:
-        if any(kw in msg_low for kw in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
+        if any(kw in msg_low for kw in ["klausurvorbereitung", "exam wizard", "wizard starten"]):
             intent = "start_exam_wizard"
         elif any(msg_low.strip() == kw for kw in stop_keywords):
             intent = "stop_exam_wizard"
@@ -500,29 +500,21 @@ async def chat(request: ChatRequest):
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
     if intent is None:
         # Check for settings/reminders
-        if any(word in msg_low for word in ["einstellung", "erinnerung", "benachrichtigung", "notification", "settings", "reminder"]):
+        if msg_low == "/settings":
             intent = "settings"
-        elif any(word in msg_low for word in ["klausurvorbereitung", "exam wizard", "exam prep", "vorbereitung", "lernplan", "wizard starten"]):
-            intent = "start_exam_wizard"
         elif any(msg_low.strip() == kw for kw in stop_keywords):
             intent = "stop_exam_wizard"
         # Check for common Moodle-related keywords
-        elif any(word in msg_low for word in ["moodle", "aufgabe", "termin", "deadline", "abgabe"]):
+        elif msg_low == "/moodle":
             intent = "get_moodle_appointments"
         # Check for Stine exam keywords
-        elif any(word in msg_low for word in ["prüfung", "klausur", "exam"]):
+        elif msg_low in ["/exams", "/stine"]:
             intent = "get_stine_exams"
-        # Check for Stine messages
-        elif "nachricht" in msg_low and "stine" in msg_low:
-            intent = "get_stine_messages"
-        # Check for email
-        elif any(word in msg_low for word in ["mail", "e-mail", "email"]):
+        # Check for mail keywords
+        elif msg_low == "/mail":
             intent = "get_mail"
-        # Check for greetings
-        elif any(word in msg_low for word in ["hallo", "hi", "hey", "guten tag", "servus"]):
-            intent = "greeting"
         # Check for help
-        elif any(word in msg_low for word in ["hilfe", "help", "wie funktioniert", "was kannst du"]):
+        elif msg_low in ["hilfe", "/help"]:
             intent = "help"
 
     # If no keyword match, use LLM for intent detection
