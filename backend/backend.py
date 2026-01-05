@@ -92,7 +92,7 @@ WIZARD_INTENT_STEPS = {
 }
 
 # Cache for scraped data to avoid expensive re-scraping
-# Keyed by (username, data_type) -> { 'data': str, 'ts': float }
+# Keyed by (username, data_type) -> { 'raw_data': str, 'ts': float }
 scraper_cache = {}
 cache_lock = threading.Lock()
 CACHE_EXPIRY_SECONDS = 3600  # cache expires after 1 hour
@@ -105,45 +105,37 @@ if FRONTEND_DIST:
 
 def get_cached_scraped_data(username: str, data_type: str):
     """Get cached scraped data if available and not expired.
-    
+
     Args:
         username: User identifier
         data_type: Type of data ('moodle' or 'stine_exams')
-    
+
     Returns:
-        Tuple of (raw_data, chatgpt_response) or (None, None) if cache miss/expired
+        Tuple of (raw_data, None) or (None, None) if cache miss/expired
     """
     cache_key = (username, data_type)
-    
+
     with cache_lock:
         cached = scraper_cache.get(cache_key)
         if cached:
             # Check if cache is still valid
             if time.time() - cached.get('ts', 0) < CACHE_EXPIRY_SECONDS:
                 logging.info(f"Cache hit for {data_type} scraped data (user: {username})")
-                return cached.get('raw_data'), cached.get('chatgpt_response')
+                return cached.get('raw_data'), None
             else:
                 # Cache expired, remove it
                 logging.info(f"Cache expired for {data_type} scraped data (user: {username})")
                 del scraper_cache[cache_key]
-    
+
     return None, None
 
 
-def cache_scraped_data(username: str, data_type: str, raw_data: str, chatgpt_response: str = None):
-    """Store scraped data and optional ChatGPT response in cache.
-    
-    Args:
-        username: User identifier
-        data_type: Type of data ('moodle' or 'stine_exams')
-        raw_data: Raw scraped data to cache
-        chatgpt_response: Optional ChatGPT formatted response
-    """
+def cache_scraped_data(username: str, data_type: str, raw_data: str):
+    """Store scraped raw data in cache (ChatGPT responses are regenerated per request)."""
     cache_key = (username, data_type)
     with cache_lock:
         scraper_cache[cache_key] = {
             'raw_data': raw_data,
-            'chatgpt_response': chatgpt_response,
             'ts': time.time()
         }
     logging.info(f"Cached {data_type} scraped data (user: {username})")
@@ -571,12 +563,11 @@ async def chat(request: ChatRequest):
     if intent == "get_moodle_appointments":
         logging.info("[Chat] Processing Moodle appointments request")
         try:
-            # Check cache first for scraped data AND ChatGPT response
-            cached_data, cached_response = get_cached_scraped_data(username, 'moodle')
-            if cached_data and cached_response:
-                logging.info("[Chat] Using cached Moodle data and response")
+            # Check cache first for scraped data
+            cached_data, _ = get_cached_scraped_data(username, 'moodle')
+            if cached_data:
+                logging.info("[Chat] Using cached Moodle raw data; regenerating response for current query")
                 termine = cached_data
-                response = cached_response
             else:
                 # Cache miss - scrape and cache the data
                 logging.info("[Chat] Cache miss - starting Moodle scraper")
@@ -591,14 +582,13 @@ async def chat(request: ChatRequest):
                     end_turn(timer, bot_message=msg, intent=intent)
                     return {"response": msg}
 
-                
-                # Ask ChatGPT to format the data
-                logging.info("[Chat] Asking ChatGPT to format Moodle data")
-                response = ask_chatgpt_moodle(termine, api_key)
-                logging.info(f"[Chat] ChatGPT response length: {len(response)}")
-                
-                # Cache both raw data and ChatGPT response
-                cache_scraped_data(username, 'moodle', termine, response)
+                # Cache raw data only
+                cache_scraped_data(username, 'moodle', termine)
+
+            # Always regenerate the ChatGPT answer so user constraints in the latest message are applied
+            logging.info("[Chat] Asking ChatGPT to format Moodle data for current query")
+            response = ask_chatgpt_moodle(termine, api_key)
+            logging.info(f"[Chat] ChatGPT response length: {len(response)}")
             logging.info(f"[Chat] ChatGPT response length: {len(response)}")
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
@@ -623,12 +613,11 @@ async def chat(request: ChatRequest):
 
     elif intent == "get_stine_exams":
         try:
-            # Check cache first for scraped data AND ChatGPT response
-            cached_data, cached_response = get_cached_scraped_data(username, 'stine_exams')
-            if cached_data and cached_response:
-                logging.info("[Chat] Using cached STINE data and response")
+            # Check cache first for scraped data
+            cached_data, _ = get_cached_scraped_data(username, 'stine_exams')
+            if cached_data:
+                logging.info("[Chat] Using cached STINE raw data; regenerating response for current query")
                 exams_text = cached_data
-                response = cached_response
             else:
                 # Cache miss - scrape and cache the data
                 exams_text = scrape_stine_exams(request.username, request.password)
@@ -640,12 +629,11 @@ async def chat(request: ChatRequest):
                     end_turn(timer, bot_message=msg, intent=intent)
                     return {"response": msg}
 
-                
-                # Ask ChatGPT to format the data
-                response = ask_chatgpt_exams(exams_text, api_key)
-                
-                # Cache both raw data and ChatGPT response
-                cache_scraped_data(username, 'stine_exams', exams_text, response)
+                # Cache raw data only
+                cache_scraped_data(username, 'stine_exams', exams_text)
+
+            # Always regenerate the ChatGPT answer so user constraints in the latest message are applied
+            response = ask_chatgpt_exams(exams_text, api_key)
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.

@@ -70,6 +70,46 @@ def extract_events_from_ics(ics_content: str) -> List[dict]:
     return events
 
 
+def _normalize_ics_dates(ics_content: str) -> str:
+    """Ensure ICS dates are not stuck in an outdated year.
+
+    OpenAI occasionally invents years (e.g., 2024) when the input text omits the
+    year. We assume the current calendar year is the correct default; if the
+    month is already past in the current year, roll forward to next year.
+    """
+    today = datetime.date.today()
+    current_year = today.year
+    current_month = today.month
+
+    def _replace(tag: str, text: str) -> str:
+        pattern = rf"({tag}(?:;VALUE=(?:DATE|DATE-TIME))?:)(\d{{8}})"
+
+        def repl(match: re.Match) -> str:
+            prefix, date_str = match.groups()
+            try:
+                year = int(date_str[0:4])
+                month = int(date_str[4:6])
+                day = int(date_str[6:8])
+            except ValueError:
+                return match.group(0)
+
+            if year < current_year:
+                target_year = current_year
+                if month < current_month:
+                    target_year += 1
+                fixed = f"{target_year:04d}{month:02d}{day:02d}"
+                logging.info(f"[ICS] Normalized {tag} year {date_str} -> {fixed}")
+                return f"{prefix}{fixed}"
+
+            return match.group(0)
+
+        return re.sub(pattern, repl, text)
+
+    normalized = _replace("DTSTART", ics_content)
+    normalized = _replace("DTEND", normalized)
+    return normalized
+
+
 def make_calendar_entries(termine: str, api_key: Optional[str]) -> Tuple[Optional[str], str]:
     """Parse dates from appointment text and create ICS format calendar entries.
     
@@ -87,10 +127,16 @@ def make_calendar_entries(termine: str, api_key: Optional[str]) -> Tuple[Optiona
         return None, "Kein API-Key vorhanden. Bitte in der App speichern und erneut versuchen."
 
     client = OpenAI(api_key=key)
+    today = datetime.date.today()
+    current_year = today.year
+    next_year = current_year + 1
+
     user_message = (
         "Hier sind meine Termine:\n" + termine
         + "\nFormatiere diese Termine als Kalender-Einträge im ICS-Format. Antworte nur mit dem reinen ICS-Dateiinhalt ohne zusätzliche Erklärungen."
         + "\nWICHTIG: Verwende DTSTART;VALUE=DATE:YYYYMMDD Format (KEINE Zeitstempel, NUR das Datum)."
+        + f"\nHeutiges Jahr: {current_year}. Wenn im Text kein Jahr steht, verwende {current_year}; nur wenn der Monat bereits vergangen ist, nutze {next_year}."
+        + "\nNutze niemals vergangene Jahre."  # Avoid model defaulting to outdated years
         + "\nBeispiel: DTSTART;VALUE=DATE:20260204 (für 4. Februar 2026)"
         + "\nWICHTIG: Füge NUR Abgabetermine/Endtermine/Deadlines hinzu. NICHT beginnende Termine wie 'Öffnet am' oder 'Beginnt am'."
         + "\nÜberspringe alle Termine, die kein Datum haben."
@@ -101,12 +147,13 @@ def make_calendar_entries(termine: str, api_key: Optional[str]) -> Tuple[Optiona
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Du bist ein ICS-Generator. WICHTIG: Verwende IMMER DTSTART;VALUE=DATE:YYYYMMDD (nur Datum, kein Zeitstempel). Erstelle NUR Events für Abgabetermine/Endtermine. Ignoriere beginnende Termine. SUMMARY-Format: 'Beschreibung (Modul)'."},
+            {"role": "system", "content": f"Du bist ein ICS-Generator. Heutiges Jahr ist {current_year}. Wenn im Text kein Jahr steht, verwende {current_year} (oder {next_year}, falls der Monat schon vorbei ist). Verwende IMMER DTSTART;VALUE=DATE:YYYYMMDD (nur Datum, kein Zeitstempel). Erstelle NUR Events für Abgabetermine/Endtermine. Ignoriere beginnende Termine. SUMMARY-Format: 'Beschreibung (Modul)'."},
             {"role": "user", "content": user_message}
         ]
     )
     # Persist the raw ICS text to a timestamped debug file for troubleshooting and return filename.
     ics_content = response.choices[0].message.content or ""
+    ics_content = _normalize_ics_dates(ics_content)
     saved_basename = None
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
