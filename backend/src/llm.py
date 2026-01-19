@@ -170,13 +170,6 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
         "calendar_yes",
         "calendar_no",
         "start_exam_wizard",
-        "stop_exam_wizard",
-        "wizard_pick_module",
-        "wizard_pick_topics",
-        "wizard_pick_order",
-        "wizard_collect_materials",
-        "wizard_questions_or_walkthrough",
-        "wizard_followup",
         "unknown",
     ]
 
@@ -193,12 +186,6 @@ async def determine_intent(message: str, api_key: Optional[str]) -> str:
         + "If the user replies with an affirmative like 'ja' (German) or 'yes', return 'calendar_yes'.\n"
         + "If the user replies with a negative like 'nein' (German) or 'no', return 'calendar_no'.\n"
         + "If the user wants to start exam prep (e.g., Klausurvorbereitung, Lernplan, Wizard starten), return 'start_exam_wizard'.\n"
-        + "If the user wants to stop or exit the exam prep wizard, return 'stop_exam_wizard'.\n"
-        + "If the user provides module names, return 'wizard_pick_module'.\n"
-        + "If the user lists topics/chapters, return 'wizard_pick_topics'.\n"
-        + "If the user chooses or asks for the learning order, return 'wizard_pick_order'.\n"
-        + "If the user provides uploads/links/material, return 'wizard_collect_materials'.\n"
-        + "If the user says they have/no questions or wants explanation/Übungen, return 'wizard_questions_or_walkthrough'.\n"
         + "If the user continues within the wizard (follow-ups), return 'wizard_followup'.\n"
         + f"User message: \"{msg}\"\n"
     )

@@ -74,22 +74,13 @@ conversation_state = {}
 state_lock = threading.Lock()
 STATE_EXPIRY_SECONDS = 120  # consent expires after 2 minutes
 
-# Wizard flow constants
-WIZARD_STEP_PICK_MODULE = "pick_module"
-WIZARD_STEP_PICK_TOPICS = "pick_topics"
-WIZARD_STEP_PICK_ORDER = "pick_order"
-WIZARD_STEP_COLLECT_MATERIALS = "collect_materials"
-WIZARD_STEP_QUESTIONS = "questions_or_walkthrough"
-WIZARD_STEP_FOLLOWUP = "followup"
-
-WIZARD_INTENT_STEPS = {
-    "wizard_pick_module": WIZARD_STEP_PICK_MODULE,
-    "wizard_pick_topics": WIZARD_STEP_PICK_TOPICS,
-    "wizard_pick_order": WIZARD_STEP_PICK_ORDER,
-    "wizard_collect_materials": WIZARD_STEP_COLLECT_MATERIALS,
-    "wizard_questions_or_walkthrough": WIZARD_STEP_QUESTIONS,
-    "wizard_followup": WIZARD_STEP_FOLLOWUP,
-}
+# Wizard flow - simple sequential steps (1-6)
+# Step 1: Ask for module
+# Step 2: Ask for topics
+# Step 3: Ask which topic to start with (if multiple)
+# Step 4: Collect materials
+# Step 5: Ask for questions
+# Step 6: Answer and offer to continue with next topic
 
 # Cache for scraped data to avoid expensive re-scraping
 # Keyed by (username, data_type) -> { 'raw_data': str, 'ts': float }
@@ -144,12 +135,10 @@ def cache_scraped_data(username: str, data_type: str, raw_data: str):
 def _new_wizard_state():
     return {
         'active': True,
-        'step': WIZARD_STEP_PICK_MODULE,
+        'step': 1,  # Sequential step number
         'module': None,
         'topics': [],
-        'order': [],
-        'order_index': 0,
-        'current_topic': None,
+        'current_topic_index': 0,
         'materials': {}
     }
 
@@ -182,17 +171,55 @@ def _is_negative_response(text: str):
     return False
 
 
+def _extract_topic_index(user_text: str, topics):
+    """Extract topic index from ordinal words or numbers. Returns index (0-based) or None."""
+    if not topics:
+        return None
+    lowered = user_text.strip().lower()
+    
+    # Check for ordinal numbers: 1., 2., 3., etc.
+    import re
+    ordinal_match = re.search(r'\b(\d+)\.?\b', lowered)
+    if ordinal_match:
+        num = int(ordinal_match.group(1))
+        idx = num - 1  # Convert to 0-based
+        if 0 <= idx < len(topics):
+            return idx
+    
+    # Check for German ordinal words
+    ordinal_words = {
+        'erste': 0, 'erstes': 0, 'ersten': 0,
+        'zweite': 1, 'zweites': 1, 'zweiten': 1,
+        'dritte': 2, 'drittes': 2, 'dritten': 2,
+        'vierte': 3, 'viertes': 3, 'vierten': 3,
+        'fünfte': 4, 'fünftes': 4, 'fünften': 4,
+        'sechste': 5, 'sechstes': 5, 'sechsten': 5,
+        'siebte': 6, 'siebtes': 6, 'siebten': 6,
+        'achte': 7, 'achtes': 7, 'achten': 7,
+        'neunte': 8, 'neuntes': 8, 'neunten': 8,
+        'zehnte': 9, 'zehntes': 9, 'zehnten': 9,
+    }
+    
+    for word, idx in ordinal_words.items():
+        if word in lowered and idx < len(topics):
+            return idx
+    
+    return None
+
+
 def _pick_topic_from_input(user_text: str, topics):
     if not topics:
         return None
     lowered = user_text.strip().lower()
     if not lowered:
         return None
-    # numeric selection (1-based)
-    if lowered.isdigit():
-        idx = int(lowered) - 1
-        if 0 <= idx < len(topics):
-            return topics[idx]
+    
+    # First try to extract ordinal index
+    idx = _extract_topic_index(user_text, topics)
+    if idx is not None:
+        return topics[idx]
+    
+    # Exact match
     for t in topics:
         if lowered == t.lower():
             return t
@@ -209,111 +236,128 @@ def _handle_wizard_message(username: str, message: str, state: dict, api_key: st
         return None
 
     msg = message.strip()
-    step = wizard.get('step', WIZARD_STEP_PICK_MODULE)
+    msg_low = msg.lower()
+    
+    # Check for cancellation keywords at any step
+    cancel_keywords = ["exit", "abbruch", "abbrechen", "stop", "beenden", "nein danke", "nicht mehr"]
+    if any(kw in msg_low for kw in cancel_keywords):
+        # Delete wizard state completely on cancellation
+        with state_lock:
+            if username in conversation_state:
+                conversation_state[username].pop('wizard', None)
+                if not conversation_state[username]:  # Remove empty state
+                    del conversation_state[username]
+        return "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."
+    
+    step = wizard.get('step', 1)
     response = None
+    topics = wizard.get('topics', [])
+    current_idx = wizard.get('current_topic_index', 0)
+    current_topic = topics[current_idx] if topics and current_idx < len(topics) else None
 
-    if step == WIZARD_STEP_PICK_MODULE:
-        wizard['module'] = msg
-        wizard['step'] = WIZARD_STEP_PICK_TOPICS
-        response = f"Alles klar, Modul '{msg}'.\n\n Geht es für dich um ein oder mehrere bestimmte Themen oder Kapitel? Bitte liste diese auf, getrennt durch Kommas."
+    if step == 1:  # Ask for module
+        # Check if user gives a negative/unsure response
+        if _is_negative_response(msg) or any(kw in msg_low for kw in ["weiß nicht", "keine ahnung", "unsicher", "keins"]):
+            response = "Um dir bei der Vorbereitung helfen zu können, muss ich wissen, um welches Modul es geht. Bitte gib den Modulnamen an."
+        elif not msg or len(msg) < 2 or not any(c.isalnum() for c in msg):
+            response = "Bitte gib einen gültigen Modulnamen ein oder schreibe 'exit' zum Abbrechen."
+        else:
+            wizard['module'] = msg
+            wizard['step'] = 2
+            response = f"Alles klar, Modul '{msg}'.\n\nGeht es für dich um ein oder mehrere bestimmte Themen oder Kapitel? Wenn ja, liste diese auf, getrennt durch Kommas. Wenn du keine konkreten Themen hast, ist es auch okay."
 
-    elif step == WIZARD_STEP_PICK_TOPICS:
-        # Check if user explicitly said "no" or doesn't want to specify topics
+    elif step == 2:  # Ask for topics
         if _is_negative_response(msg):
-            # User doesn't want to specify topics - use the module name as single topic
             wizard['topics'] = [wizard.get('module', 'Allgemein')]
-            wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
-            wizard['current_topic'] = wizard['topics'][0]
-            wizard['order'] = wizard['topics']
-            wizard['order_index'] = 0
-            response = (
-                f"Alles klar, dann arbeiten wir über das ganze Modul. Lade gerne Folien, Aufgaben oder Altklausuren hoch oder beschreibe den Stoff kurz.\n\n"
-                "Wenn du das gerade nicht möchtest, schreibe 'kein upload'."
-            )
+            wizard['step'] = 4  # Skip topic selection
+            response = "Alles klar, dann arbeiten wir über das ganze Modul. \n\nBeschreibe gerne den Stoff kurz.\n\nWenn du das gerade nicht möchtest, schreibe 'kein upload'."
         else:
-            topics = _parse_topics_list(msg)
-            if not topics:
-                response = "Ich habe keine Themen erkannt. Bitte liste die Themen oder Kapitel, getrennt durch Kommas oder Zeilenumbrüche."
+            topics_parsed = _parse_topics_list(msg)
+            # Filter out negative responses from parsed topics
+            topics_parsed = [t for t in topics_parsed if not _is_negative_response(t) and t.lower() not in ["keins", "keine", "keine Ahnung", "unsicher", "weiß nicht"]]
+            
+            if not topics_parsed:
+                response = "Ich habe keine Themen erkannt. Bitte liste die Themen oder Kapitel, getrennt durch Kommas. Wenn du keine spezifischen Themen hast, schreibe einfach 'nein' oder 'keine'."
             else:
-                wizard['topics'] = topics
-                wizard['step'] = WIZARD_STEP_PICK_ORDER
-                topic_list = "\n- " + "\n- ".join(topics)
-                response = (
-                    f"Verstanden. Ich habe diese Themen gespeichert:{topic_list}\n\n"
-                    "Mit was möchtest du anfangen? Wenn du unsicher bist, schreibe 'Vorschlag', dann schlage ich eine Reihenfolge vor."
-                )
+                wizard['topics'] = topics_parsed
+                if len(topics_parsed) == 1:
+                    wizard['step'] = 4  # Skip topic selection if only one topic
+                    response = f"Verstanden. Wir arbeiten zum Thema '{topics_parsed[0]}'.\n\nBeschreibe gerne den Stoff kurz. \n\nWenn du das gerade nicht möchtest, schreibe 'kein upload'."
+                else:
+                    wizard['step'] = 3
+                    topic_list = "\n- " + "\n- ".join(topics_parsed)
+                    response = f"Verstanden. Ich habe diese Themen gespeichert:{topic_list}\n\nMit was möchtest du anfangen? Wenn du unsicher bist, schreibe 'Vorschlag'."
 
-    elif step == WIZARD_STEP_PICK_ORDER:
+    elif step == 3:  # Ask which topic to start with
         topics = wizard.get('topics', [])
+        
+        # Try to pick topic by name or ordinal number
         choice = _pick_topic_from_input(msg, topics)
-        if 'vorschlag' in msg.lower() or not choice:
-            order = topics
+        
+        if 'vorschlag' in msg_low or not choice:
             choice = topics[0] if topics else None
-            note = "Dann fangen wir doch einfach mit dem ersten Thema an." if topics else "Keine Themen vorhanden."
+            note = "Dann fangen wir mit dem ersten Thema an."
         else:
-            order = [choice] + [t for t in topics if t != choice]
-            note = f"Wir starten mit '{choice}'."
-
+            # Reorder topics to start with chosen one
+            topics = [choice] + [t for t in topics if t != choice]
+            wizard['topics'] = topics
+            note = f"Okay, wir starten mit '{choice}'."
+        
         if not choice:
             response = "Ich konnte kein Thema auswählen. Bitte nenne ein Thema oder schreibe 'Vorschlag'."
         else:
-            wizard['order'] = order
-            wizard['current_topic'] = choice
-            wizard['order_index'] = 0
-            wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
-            response = (
-                f"{note} Wenn du möchtest, lade Folien, Aufgaben oder Altklausuren hoch oder beschreibe den Stoff kurz.\n\n"
-                " Wenn nicht, schreibe 'kein upload'."
-            )
+            wizard['step'] = 4
+            response = f"{note} \n\nBeschreibe gerne den Stoff kurz. \n\nWenn du das gerade nicht möchtest, schreibe 'kein upload'."
 
-    elif step == WIZARD_STEP_COLLECT_MATERIALS:
-        current_topic = wizard.get('current_topic')
-        wizard.setdefault('materials', {})[current_topic] = msg
-        wizard['step'] = WIZARD_STEP_QUESTIONS
+    elif step == 4:  # Collect materials
+        # If user just repeats the topic name or says they have no upload, skip storing as material
+        no_materials = _is_negative_response(msg) or msg_low in ["kein upload", "kein", "keine", "kein material"]
+        repeats_topic = current_topic and msg_low == current_topic.strip().lower()
+
+        wizard.setdefault('materials', {})
+        if not no_materials and not repeats_topic:
+            wizard['materials'][current_topic] = msg
+
+        wizard['step'] = 5
         response = (
-            f"Alles klar zu '{current_topic}'. Hast du bereits konkrete Fragen?"
-            " Falls nein, starte ich mit einer kurzen Erklärung des Themas."
+            f"Alles klar zu '{current_topic}'. "
+            "Hast du bereits konkrete Fragen? Falls nein, starte ich mit einer kurzen Erklärung des Themas."
         )
 
-    elif step == WIZARD_STEP_QUESTIONS:
-        current_topic = wizard.get('current_topic')
+    elif step == 5:  # Ask for questions and provide answer
         module = wizard.get('module')
         materials = wizard.get('materials', {}).get(current_topic, "")
-        wizard['step'] = WIZARD_STEP_FOLLOWUP
-        low = msg.lower()
-        if any(tok in low for tok in ["keine", "kein", "nein"]):
+        wizard['step'] = 6
+        if any(tok in msg_low for tok in ["keine", "kein", "nein"]):
             ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, "keine", api_key)
             response = ai_resp + "\n\nStell jederzeit Zwischenfragen oder schreibe 'weiter' für das nächste Thema."
         else:
             ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, msg, api_key)
             response = ai_resp + "\n\nWenn du fertig bist, schreibe 'weiter' für das nächste Thema."
 
-    elif step == WIZARD_STEP_FOLLOWUP:
-        current_topic = wizard.get('current_topic')
-        order = wizard.get('order', [])
-        idx = wizard.get('order_index', 0)
-        low = msg.lower()
-        if any(tok in low for tok in ["weiter", "nächste", "next"]):
-            next_idx = idx + 1
-            if next_idx < len(order):
-                wizard['order_index'] = next_idx
-                wizard['current_topic'] = order[next_idx]
-                wizard['step'] = WIZARD_STEP_COLLECT_MATERIALS
-                response = (
-                    f"Nächstes Thema: '{order[next_idx]}'. Lade kurz Materialien hoch oder beschreibe den Stoff."
-                    " Wenn du nichts hast, schreibe 'kein upload'."
-                )
+    elif step == 6:  # Follow-up questions or next topic
+        if any(tok in msg_low for tok in ["weiter", "nächste", "next"]):
+            next_idx = current_idx + 1
+            if next_idx < len(topics):
+                wizard['current_topic_index'] = next_idx
+                wizard['step'] = 4  # Back to collect materials
+                response = f"Nächstes Thema: '{topics[next_idx]}'. \n\nBeschreibe gerne den Stoff kurz. \n\nWenn du das gerade nicht möchtest, schreibe 'kein upload'."
             else:
-                wizard['active'] = False
-                wizard['step'] = WIZARD_STEP_PICK_MODULE
-                response = "Du hast alle Themen durchgearbeitet. Wizard beendet."
+                # All topics done - end wizard
+                with state_lock:
+                    if username in conversation_state:
+                        conversation_state[username].pop('wizard', None)
+                        if not conversation_state[username]:
+                            del conversation_state[username]
+                return "Du hast alle Themen durchgearbeitet. Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll!"
         else:
+            # Follow-up question
             module = wizard.get('module')
             materials = wizard.get('materials', {}).get(current_topic, "")
             ai_resp = ask_chatgpt_topic_help(module, current_topic, materials, msg, api_key)
             response = ai_resp + "\n\nSchreibe 'weiter' für das nächste Thema oder frag weiter zu diesem Thema."
 
-    # update timestamp and persist wizard state
+    # Update timestamp and persist wizard state
     with state_lock:
         conversation_state[username] = state or {}
         conversation_state[username]['wizard'] = wizard
@@ -372,8 +416,8 @@ async def chat(request: ChatRequest):
     msg_low = request.message.strip().lower()
     stop_keywords = ("exit")
 
-    # Allow global exit to always cancel the wizard, regardless of current state
-    if msg_low.strip() == "exit":
+    # Allow global exit to cancel the wizard if it's active
+    if wizard_active and msg_low.strip() == "exit":
         with state_lock:
             user_state = conversation_state.get(username, {})
             user_state.pop('wizard', None)
@@ -486,16 +530,13 @@ async def chat(request: ChatRequest):
     if intent is None:
         if any(kw in msg_low for kw in ["klausurvorbereitung", "exam wizard", "wizard starten"]):
             intent = "start_exam_wizard"
-        elif any(msg_low.strip() == kw for kw in stop_keywords):
-            intent = "stop_exam_wizard"
+            wizard_active = True
 
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
     if intent is None:
         # Check for settings/reminders
         if any(msg_low.strip() == kw for kw in ["settings", "/settings", "einstellungen", "erinnerungseinstellungen"]):
             intent = "settings"
-        elif any(msg_low.strip() == kw for kw in stop_keywords):
-            intent = "stop_exam_wizard"
         # Check for common Moodle-related keywords
         elif msg_low == "/moodle":
             intent = "get_moodle_appointments"
@@ -526,8 +567,6 @@ async def chat(request: ChatRequest):
     logging.info(f"[Chat] Detected intent: {intent}")
     logging.info(f"[Chat] Username: {username}")
     logging.info(f"[Chat] Has password: {bool(request.password)}")
-
-    wizard_step_intents = set(WIZARD_INTENT_STEPS.keys())
     
     # Route based on detected intent
     if intent == "start_exam_wizard":
@@ -542,23 +581,22 @@ async def chat(request: ChatRequest):
 
     elif intent == "stop_exam_wizard":
         with state_lock:
-            user_state = conversation_state.get(username, {})
-            user_state.pop('wizard', None)
-            user_state['ts'] = time.time()
-            conversation_state[username] = user_state
+            if username in conversation_state:
+                conversation_state[username].pop('wizard', None)
+                if not conversation_state[username]:
+                    del conversation_state[username]
+        end_turn(timer, bot_message="Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", intent="stop_exam_wizard")
         return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
 
-    elif intent in wizard_step_intents:
-        if not wizard_active:
-            base_state = state or {}
-            wizard = _new_wizard_state()
-            with state_lock:
-                conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
-            return {"response": "Ich starte den Klausur-Wizard. Welches Modul?"}
-        wizard_response = _handle_wizard_message(username, request.message, state or {}, api_key)
-        if wizard_response:
-            return {"response": wizard_response}
-        # fall through if no response
+    # Any other intent while wizard is active: reset wizard and process the intent normally
+    if wizard_active and intent not in ("start_exam_wizard", "stop_exam_wizard"):
+        logging.info(f"[Chat] Wizard interrupted by intent '{intent}' - resetting wizard")
+        with state_lock:
+            if username in conversation_state:
+                conversation_state[username].pop('wizard', None)
+                if not conversation_state[username]:
+                    del conversation_state[username]
+        # Continue processing the intent below
 
     if intent == "get_moodle_appointments":
         logging.info("[Chat] Processing Moodle appointments request")
