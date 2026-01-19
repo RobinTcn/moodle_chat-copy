@@ -18,4 +18,8 @@ export interface ChatResponse {
   suggested_events?: CalendarEventSuggestion[];
   // optional: reminder settings configured by user
   settings?: ReminderSettings;
+  // optional: wizard state (true if exam preparation wizard is active)
+  wizard_active?: boolean;
+  // optional: whether this message was sent by the wizard
+  is_wizard_message?: boolean;
 }

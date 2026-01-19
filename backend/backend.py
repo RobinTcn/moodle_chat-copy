@@ -132,6 +132,33 @@ def cache_scraped_data(username: str, data_type: str, raw_data: str):
     logging.info(f"Cached {data_type} scraped data (user: {username})")
 
 
+def _build_chat_response(response_text: str, username: str = None, settings: dict = None, suggested_events: list = None, ics_filename: str = None, ics: str = None, is_wizard_message: bool = False):
+    """Helper function to build chat response with wizard status."""
+    result = {"response": response_text}
+    
+    # Add wizard status if username provided
+    if username:
+        with state_lock:
+            state = conversation_state.get(username, {})
+            wizard = state.get('wizard')
+            result["wizard_active"] = bool(wizard and wizard.get('active'))
+    
+    # Add is_wizard_message flag
+    result["is_wizard_message"] = is_wizard_message
+    
+    # Add optional fields
+    if settings:
+        result["settings"] = settings
+    if suggested_events:
+        result["suggested_events"] = suggested_events
+    if ics_filename:
+        result["ics_filename"] = ics_filename
+    if ics:
+        result["ics"] = ics
+    
+    return result
+
+
 def _new_wizard_state():
     return {
         'active': True,
@@ -399,7 +426,7 @@ async def chat(request: ChatRequest):
     if not api_key:
         msg = "Kein API-Key gesetzt. Bitte den ChatGPT-Key beim Start speichern oder in den Einstellungen hinzufügen."
         end_turn(timer, bot_message=msg, intent="no_api_key")
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
 
     # Check and expire any old conversation state for this user
@@ -424,7 +451,7 @@ async def chat(request: ChatRequest):
             user_state['ts'] = time.time()
             conversation_state[username] = user_state
         end_turn(timer, bot_message="Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", intent="stop_exam_wizard")
-        return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
+        return _build_chat_response("Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", username, is_wizard_message=True)
 
     # If the bot previously asked about adding to calendar, interpret simple yes/no locally
     intent = None
@@ -448,7 +475,7 @@ async def chat(request: ChatRequest):
                 if days < 0 or days > 30:
                     msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
                     end_turn(timer, bot_message=msg, intent="settings")
-                    return {"response": msg}
+                    return _build_chat_response(msg, username)
 
                 
                 # Save to state and ask next question
@@ -459,12 +486,12 @@ async def chat(request: ChatRequest):
                 
                 msg = f"Gut, ich erinnere dich {days} Tag(e) vor Aufgaben-Deadlines.\n\nWie viele Tage vor einer Klausur möchtest du erinnert werden? (z.B. 7 für eine Woche vorher)"
                 end_turn(timer, bot_message=msg, intent="settings")
-                return {"response": msg}
+                return _build_chat_response(msg, username)
 
             except ValueError:
                 msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
                 end_turn(timer, bot_message=msg, intent="settings")
-                return {"response": msg}
+                return _build_chat_response(msg, username)
 
         
         elif step == 'ask_exam_days':
@@ -474,7 +501,7 @@ async def chat(request: ChatRequest):
                 if days < 0 or days > 30:
                     msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
                     end_turn(timer, bot_message=msg, intent="settings")
-                    return {"response": msg}
+                    return _build_chat_response(msg, username)
 
                 
                 # Save settings and clear state
@@ -498,7 +525,7 @@ async def chat(request: ChatRequest):
             except ValueError:
                 msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
                 end_turn(timer, bot_message=msg, intent="settings")
-                return {"response": msg}
+                return _build_chat_response(msg, username)
 
         
         # Fallback: should not reach here
@@ -507,7 +534,7 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         msg = "Ein Fehler ist aufgetreten. Bitte versuche es erneut."
         end_turn(timer, bot_message=msg, intent="settings")
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
 
     # While wizard is active: skip intent detection; only allow explicit stop keyword
@@ -518,13 +545,13 @@ async def chat(request: ChatRequest):
                 user_state.pop('wizard', None)
                 user_state['ts'] = time.time()
                 conversation_state[username] = user_state
-            return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
+            return _build_chat_response("Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", username, is_wizard_message=True)
 
         wizard_response = _handle_wizard_message(username, request.message, state, api_key)
         if wizard_response:
-            return {"response": wizard_response}
+            return _build_chat_response(wizard_response, username, is_wizard_message=True)
         # If wizard handler could not process, keep user in wizard and prompt to continue or stop
-        return {"response": "Ich bin im Klausur-Wizard. Bitte beantworte die letzte Frage oder schreibe 'wizard beenden' zum Abbrechen."}
+        return _build_chat_response("Ich bin im Klausur-Wizard. Bitte beantworte die letzte Frage oder schreibe 'wizard beenden' zum Abbrechen.", username, is_wizard_message=True)
 
     # Quick keywords for starting the wizard without LLM
     if intent is None:
@@ -574,10 +601,11 @@ async def chat(request: ChatRequest):
         wizard = _new_wizard_state()
         with state_lock:
             conversation_state[username] = {**base_state, 'wizard': wizard, 'ts': time.time()}
-        return {"response": "Gern helfe ich dir bei der Klausurvorbereitung.\n\n"
+        response_msg = ("Gern helfe ich dir bei der Klausurvorbereitung.\n\n"
                  " Du kannst den Vorbereitungs-Wizard jederzeit mit 'exit' abbrechen.\n\n"
                  " Damit ich dir helfen kann, muss ich dir zunächst ein paar Fragen stellen.\n"
-                 " 1. Um welches Modul geht es?"}
+                 " 1. Um welches Modul geht es?")
+        return _build_chat_response(response_msg, username, is_wizard_message=True)
 
     elif intent == "stop_exam_wizard":
         with state_lock:
@@ -586,7 +614,7 @@ async def chat(request: ChatRequest):
                 if not conversation_state[username]:
                     del conversation_state[username]
         end_turn(timer, bot_message="Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", intent="stop_exam_wizard")
-        return {"response": "Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll."}
+        return _build_chat_response("Wizard beendet. Sag Bescheid, wenn ich wieder helfen soll.", username, is_wizard_message=True)
 
     # Any other intent while wizard is active: reset wizard and process the intent normally
     if wizard_active and intent not in ("start_exam_wizard", "stop_exam_wizard"):
@@ -618,7 +646,7 @@ async def chat(request: ChatRequest):
                     logging.warning(f"[Chat] Scraper returned error: {termine[:100]}")
                     msg = "Moodle ist gerade nicht erreichbar. Bitte versuche es später noch einmal."
                     end_turn(timer, bot_message=msg, intent=intent)
-                    return {"response": msg}
+                    return _build_chat_response(msg, username)
 
                 # Cache raw data only
                 cache_scraped_data(username, 'moodle', termine)
@@ -637,17 +665,17 @@ async def chat(request: ChatRequest):
                     conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': termine, 'ts': time.time() }
                 logging.info("[Chat] Calendar option offered - raw data stored in state")
             end_turn(timer, bot_message=response, intent=intent)
-            return {"response": response}
+            return _build_chat_response(response, username)
 
         except Exception as e:
             response = f"Fehler beim Abrufen: {e}"
             end_turn(timer, bot_message=response, intent=intent)
-            return {"response": response}
+            return _build_chat_response(response, username)
 
     elif intent == "get_stine_messages":
         msg = "Die Funktion zum Abrufen von Stine-Nachrichten ist noch nicht implementiert."
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     elif intent == "get_stine_exams":
         try:
@@ -665,7 +693,7 @@ async def chat(request: ChatRequest):
                     logging.warning(f"[Chat] STINE scraper returned error: {exams_text[:100]}")
                     msg = "STINE ist gerade nicht erreichbar. Bitte versuche es später noch einmal."
                     end_turn(timer, bot_message=msg, intent=intent)
-                    return {"response": msg}
+                    return _build_chat_response(msg, username)
 
                 # Cache raw data only
                 cache_scraped_data(username, 'stine_exams', exams_text)
@@ -681,17 +709,17 @@ async def chat(request: ChatRequest):
                     conversation_state[username] = { 'awaiting_calendar': True, 'raw_termine': exams_text, 'ts': time.time() }
                 logging.info("[Chat] Calendar option offered for STINE exams - raw data stored in state")
             end_turn(timer, bot_message=response, intent=intent)
-            return {"response": response}
+            return _build_chat_response(response, username)
 
         except Exception as e:
             response = f"Fehler beim Abrufen der Stine-Prüfungen: {e}"
             end_turn(timer, bot_message=response, intent=intent)
-            return {"response": response}
+            return _build_chat_response(response, username)
 
     elif intent == "get_mail":
         msg = "Die Funktion zum Abrufen von E-Mails ist noch nicht implementiert."
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     elif intent == "settings":
         # Start settings configuration dialog
@@ -703,12 +731,12 @@ async def chat(request: ChatRequest):
             }
         msg = "**Lass uns deine Erinnerungseinstellungen konfigurieren!** \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     elif intent == "greeting":
         msg = "Hallo! Wie kann ich dir helfen?"
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     elif intent == "help":
         msg = "Ich kann dir bei folgenden Dingen helfen:\n\n" \
@@ -718,7 +746,7 @@ async def chat(request: ChatRequest):
                          "- Kalendertermine hinzufügen\n" \
                          " - dich bei der Klausurvorbereitung unterstützen\n\n"
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     elif intent == "calendar_yes":
         # proceed to create calendar entries
@@ -734,7 +762,7 @@ async def chat(request: ChatRequest):
             logging.error("[Chat] Calendar YES: No raw data found in state")
             msg = "Fehler: Keine Termine verfügbar. Bitte erneut anfragen."
             end_turn(timer, bot_message=msg, intent=intent)
-            return {"response": msg}
+            return _build_chat_response(msg, username)
 
         
         try:
@@ -747,15 +775,15 @@ async def chat(request: ChatRequest):
             logging.info(f"[Chat] Calendar YES - extracted {len(suggested_events)} events")
             
             # Return only the suggested events as buttons, no ICS file download
-            resp = {"suggested_events": suggested_events}
+            result = _build_chat_response("", username, suggested_events=suggested_events)
             end_turn(timer, bot_message=f"suggested_events returned ({len(suggested_events)} events)", intent=intent)
-            return resp
+            return result
 
         except Exception as e:
             response = f"Fehler beim Erstellen der Kalender-Einträge: {e}"
             logging.error(f"[Chat] Calendar entry creation failed: {e}")
             end_turn(timer, bot_message=response, intent=intent)
-            return {"response": response}
+            return _build_chat_response(response, username)
 
     elif intent == "calendar_no":
         # clear awaiting flag for this user
@@ -764,12 +792,12 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         msg = "Alles klar. Mit was kann ich dir sonst helfen?"
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
     else:
         msg = "Entschuldigung, ich habe dich nicht verstanden. Du erhälst eine Auflistung meiner Funktionen, wenn du 'Hilfe' schreibst."
         end_turn(timer, bot_message=msg, intent=intent)
-        return {"response": msg}
+        return _build_chat_response(msg, username)
 
 
 @app.get("/health")

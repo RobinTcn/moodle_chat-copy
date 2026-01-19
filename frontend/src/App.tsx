@@ -21,6 +21,7 @@ interface Message {
   sender: "user" | "bot";
   text: string;
   suggestedEvents?: CalendarEventSuggestion[];
+  isWizardMessage?: boolean;
 }
 
 // Render bot messages: allow raw HTML (buttons), Markdown headings, math via KaTeX.
@@ -187,7 +188,7 @@ function App() {
       if (res.data && res.data.response) {
         setMessages(prev => {
           const withoutTyping = prev.slice(0, -1); // drop last (typing)
-          return [...withoutTyping, { sender: "bot", text: res.data.response }];
+          return [...withoutTyping, { sender: "bot", text: res.data.response, isWizardMessage: res.data.is_wizard_message }];
         });
       } else {
         // Remove typing indicator if no response text
@@ -256,9 +257,13 @@ function App() {
 
         {selectedTab === "chat" && (
           <div>
-            {messages.map((m,i)=>(
+            {messages.map((m,i)=>{
+              const botBgClass = m.sender === "bot" && m.isWizardMessage
+                ? (darkMode ? "bg-blue-600 text-white" : "bg-blue-400 text-white")
+                : (m.sender === "user" ? "bg-green-500 text-white" : darkMode ? "bg-gray-700 text-white" : "bg-gray-300 text-black");
+              return (
               <div key={i} className={`flex mb-4 ${m.sender==="user"?"justify-end":"justify-start"}`}>
-                <div className={`rounded-lg p-3 max-w-[60%] md:max-w-[50%] lg:max-w-[40%] ${m.sender==="user"?"bg-green-500 text-white":darkMode?"bg-gray-700 text-white":"bg-gray-300 text-black"}`}>
+                <div className={`rounded-lg p-3 max-w-[60%] md:max-w-[50%] lg:max-w-[40%] ${botBgClass}`}>
                   {/* Render bot/user text. Support simple HTML or Markdown from the backend. */}
                   {m.sender === "bot" ? (
                     <>
@@ -287,7 +292,8 @@ function App() {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
             <div ref={messagesEndRef} />
 
             {/* Chat input: lifted above the bottom nav, rounded container and pill-shaped controls */}
