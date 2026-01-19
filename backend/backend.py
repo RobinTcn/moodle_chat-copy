@@ -10,6 +10,7 @@ import threading
 import sys
 import webbrowser
 import re
+import random
 
 # Import modules
 from src.models import ChatRequest, CredentialsSaveRequest, CredentialsResponse
@@ -52,6 +53,124 @@ logging.basicConfig(
 # FastAPI app can start even when Selenium/chromedriver aren't installed.
 
 latestMessage = ""
+
+# ============================================================================
+# Emotional Response System
+# ============================================================================
+
+# Dictionary mit Gefühlskategorien, Keywords und passenden Antworten
+EMOTIONAL_PATTERNS = {
+    'overwhelmed': {
+        'keywords': [
+            'zu viel', 'überwältigt', 'überfordert', 'schaffe es nicht', 'schaff es nicht',
+            'keine zeit', 'so viel', 'so schwer', 'zu schwer', 'zu viel', 'zu schwierig', 'packe es nicht',
+            'pack es nicht', 'komme nicht hinterher', 'komm nicht hinterher'
+        ],
+        'responses': [
+            "Ich verstehe, dass sich das gerade überwältigend anfühlt. Lass uns das Schritt für Schritt angehen.",
+            "Das klingt nach einer Menge auf einmal. Keine Sorge, wir nehmen das gemeinsam in Angriff.",
+            "Ich merke, dass dich das belastet. Lass uns erstmal sortieren, was am wichtigsten ist.",
+            "Das ist verständlich - manchmal ist es einfach viel. Ich helfe dir gerne dabei, Struktur reinzubringen."
+        ]
+    },
+    'stressed': {
+        'keywords': [
+            'stress', 'gestresst', 'nervös', 'angespannt', 'unter druck', 'panik',
+            'kopf platzt', 'wahnsinnig', 'irre', 'verrückt', 'angst', 'ängstlich'
+        ],
+        'responses': [
+            "Ich merke, dass dich das stresst. Atme tief durch - ich bin hier, um dir zu helfen.",
+            "Stress ist ganz normal vor wichtigen Terminen. Lass uns gemeinsam schauen, wie ich dich unterstützen kann.",
+            "Das klingt stressig. Keine Panik - wir kriegen das gemeinsam hin.",
+            "Ich verstehe, dass die Situation belastend ist. Lass uns das zusammen angehen."
+        ]
+    },
+    'frustrated': {
+        'keywords': [
+            'frustriert', 'genervt', 'ärgerlich', 'wütend', 'sauer', 'verstehe nicht',
+            'versteh nicht', 'kapiere nicht', 'kapier nicht', 'keinen sinn', 'sinnlos'
+        ],
+        'responses': [
+            "Frustration gehört zum Lernen dazu. Lass uns das gemeinsam nochmal von vorne anschauen.",
+            "Ich verstehe, dass das frustrierend ist. Manchmal hilft ein anderer Blickwinkel - ich versuche es zu erklären.",
+            "Das ist nachvollziehbar. Lass uns das Problem zusammen angehen.",
+            "Frustration zeigt oft, dass man nah dran ist. Lass mich dir helfen, das zu durchbrechen."
+        ]
+    },
+    'tired': {
+        'keywords': [
+            'müde', 'erschöpft', 'ausgelaugt', 'kaputt', 'fertig', 'keine energie',
+            'kraftlos', 'schlapp', 'erledigt'
+        ],
+        'responses': [
+            "Klingt, als bräuchtest du eine Pause. Denk daran, dass Erholung genauso wichtig ist wie Lernen.",
+            "Müdigkeit ist ein Zeichen, dass dein Gehirn hart arbeitet. Vielleicht hilft eine kurze Pause?",
+            "Das verstehe ich. Überlege dir, ob du eine Pause brauchst - danach geht's oft besser.",
+            "Du klingst erschöpft. Denk dran: Pausen sind produktiv, nicht verschwendete Zeit."
+        ]
+    },
+    'unmotivated': {
+        'keywords': [
+            'keine lust', 'unmotiviert', 'motivation', 'aufraffen', 'prokrastination',
+            'aufschieben', 'keinen bock', 'keine motivation', 'antriebslos'
+        ],
+        'responses': [
+            "Motivation kommt oft erst beim Machen. Lass uns klein anfangen - was ist der erste kleine Schritt?",
+            "Verstehe ich. Manchmal hilft es, mit etwas Einfachem zu starten. Was könnten wir zusammen angehen?",
+            "Fehlende Motivation ist normal. Lass uns trotzdem einen kleinen Anfang machen - oft kommt der Flow dann von selbst.",
+            "Das kenne ich. Wie wäre es, wenn wir mit etwas Leichtem beginnen? Oft wird's dann einfacher."
+        ]
+    },
+    'confused': {
+        'keywords': [
+            'verwirrt', 'durcheinander', 'unklar', 'verstehe nicht', 'versteh nicht',
+            'nicht klar', 'chaos', 'verloren', 'orientierungslos'
+        ],
+        'responses': [
+            "Verwirrung ist okay - das bedeutet, dass dein Gehirn versucht, neue Verbindungen zu knüpfen. Lass uns das klären.",
+            "Kein Problem. Lass uns das Schritt für Schritt durchgehen, bis es Sinn ergibt.",
+            "Verstehe. Manchmal braucht es eine andere Erklärung. Ich versuche, es klarer zu machen.",
+            "Das ist normal bei komplexen Themen. Lass uns das gemeinsam entwirren."
+        ]
+    },
+    'positive': {
+        'keywords': [
+            'danke', 'super', 'toll', 'prima', 'perfekt', 'genial', 'klasse',
+            'vielen dank', 'hilft mir', 'verstehe jetzt', 'versteh jetzt', 'macht sinn'
+        ],
+        'responses': [
+            "Freut mich, dass ich helfen konnte!",
+            "Gern geschehen! Ich bin für dich da.",
+            "Das freut mich zu hören! Weiter so!",
+            "Super, dass es klappt! Sag Bescheid, wenn du noch was brauchst."
+        ]
+    }
+}
+
+
+def detect_emotion(message: str):
+    """Erkennt Gefühlsäußerungen in Nachrichten und gibt passende Antwort zurück.
+    
+    Args:
+        message: Die Nachricht des Users
+        
+    Returns:
+        Tuple (emotion_category, response) oder (None, None) wenn keine Gefühlsäußerung erkannt wurde
+    """
+    msg_lower = message.lower()
+    
+    # Durchsuche alle Gefühlskategorien
+    for category, data in EMOTIONAL_PATTERNS.items():
+        for keyword in data['keywords']:
+            # Keyword muss als ganzes Wort oder Teil eines Satzes vorkommen
+            if keyword in msg_lower:
+                # Wähle zufällige Antwort aus den möglichen Antworten
+                response = random.choice(data['responses'])
+                logging.info(f"[Emotion] Detected '{category}' emotion with keyword '{keyword}'")
+                return category, response
+    
+    return None, None
+
 
 # ============================================================================
 # Global State Management
@@ -446,6 +565,12 @@ async def chat(request: ChatRequest):
     msg_low = request.message.strip().lower()
     stop_keywords = ("exit")
 
+    # ================================================================
+    # Emotional Response Detection
+    # ================================================================
+    # Erkenne Gefühlsäußerungen BEVOR Intent-Detection läuft
+    emotion_category, emotion_response = detect_emotion(request.message)
+    
     # Allow global exit to cancel the wizard if it's active
     if wizard_active and msg_low.strip() == "exit":
         with state_lock:
@@ -624,6 +749,12 @@ async def chat(request: ChatRequest):
         # Continue processing the intent below
 
     if intent == "get_moodle_appointments":
+        # Wenn Gefühlsäußerung erkannt wurde, füge empathische Antwort hinzu
+        emotion_prefix = ""
+        if emotion_response:
+            emotion_prefix = f"{emotion_response} "
+            logging.info(f"[Chat] Adding emotional response to Moodle request: {emotion_category}")
+        
         logging.info("[Chat] Processing Moodle appointments request")
         try:
             # Check cache first for scraped data
@@ -651,7 +782,11 @@ async def chat(request: ChatRequest):
             # Always regenerate the ChatGPT answer so user constraints in the latest message are applied
             logging.info("[Chat] Asking ChatGPT to format Moodle data for current query")
             response = ask_chatgpt_moodle(termine, api_key)
-            logging.info(f"[Chat] ChatGPT response length: {len(response)}")
+            
+            # Füge empathische Antwort vor die eigentliche Antwort
+            if emotion_prefix:
+                response = emotion_prefix + response
+            
             logging.info(f"[Chat] ChatGPT response length: {len(response)}")
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
@@ -675,6 +810,12 @@ async def chat(request: ChatRequest):
         return _build_chat_response(msg, username)
 
     elif intent == "get_stine_exams":
+        # Wenn Gefühlsäußerung erkannt wurde, füge empathische Antwort hinzu
+        emotion_prefix = ""
+        if emotion_response:
+            emotion_prefix = f"{emotion_response} "
+            logging.info(f"[Chat] Adding emotional response to STINE request: {emotion_category}")
+        
         try:
             # Check cache first for scraped data
             cached_data, _ = get_cached_scraped_data(username, 'stine_exams')
@@ -697,6 +838,10 @@ async def chat(request: ChatRequest):
 
             # Always regenerate the ChatGPT answer so user constraints in the latest message are applied
             response = ask_chatgpt_exams(exams_text, api_key)
+            
+            # Füge empathische Antwort vor die eigentliche Antwort
+            if emotion_prefix:
+                response = emotion_prefix + response
             
             # If ChatGPT asked whether to add events to calendar, mark state so the next short reply
             # can be interpreted as consent/denial. We only set this for the requesting user.
@@ -792,6 +937,33 @@ async def chat(request: ChatRequest):
         return _build_chat_response(msg, username)
 
     else:
+        # Wenn eine Gefühlsäußerung erkannt wurde, aber kein spezifischer Intent
+        if emotion_response:
+            # Prüfe, ob die Nachricht auch eine Frage/Anfrage enthält
+            help_keywords = ['hilfe', 'helfen', 'unterstützen', 'kannst du', 'könntest du', 'würdest du']
+            wizard_keywords = ['klausur', 'prüfung', 'vorbereitung', 'lernen', 'thema']
+            
+            if any(kw in msg_low for kw in help_keywords):
+                if any(kw in msg_low for kw in wizard_keywords):
+                    # Kombination aus Gefühl + Klausurvorbereitung-Anfrage
+                    combined_msg = f"{emotion_response} Ich kann dir bei der Klausurvorbereitung helfen! Möchtest du den Klausur-Wizard starten? (Schreibe 'Klausurvorbereitung' oder 'Hilfe' für mehr Optionen)"
+                else:
+                    # Allgemeine Hilfe-Anfrage
+                    combined_msg = f"{emotion_response} Ich kann dir bei verschiedenen Dingen helfen:\n\n" \
+                                 "- Moodle-Termine und Deadlines abrufen\n" \
+                                 "- Stine-Prüfungstermine abrufen\n" \
+                                 "- Klausurvorbereitung\n" \
+                                 "- Kalendertermine hinzufügen\n\n" \
+                                 "Was kann ich für dich tun?"
+                end_turn(timer, bot_message=combined_msg, intent=f"{emotion_category}_with_help")
+                return _build_chat_response(combined_msg, username)
+            else:
+                # Nur Gefühlsäußerung, keine konkrete Anfrage
+                msg = f"{emotion_response} Wie kann ich dir noch helfen?"
+                end_turn(timer, bot_message=msg, intent=emotion_category)
+                return _build_chat_response(msg, username)
+        
+        # Keine Gefühlsäußerung und kein Intent erkannt
         msg = "Entschuldigung, ich habe dich nicht verstanden. Du erhälst eine Auflistung meiner Funktionen, wenn du 'Hilfe' schreibst."
         end_turn(timer, bot_message=msg, intent=intent)
         return _build_chat_response(msg, username)
