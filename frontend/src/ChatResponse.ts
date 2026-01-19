@@ -22,4 +22,6 @@ export interface ChatResponse {
   wizard_active?: boolean;
   // optional: whether this message was sent by the wizard
   is_wizard_message?: boolean;
+  // optional: whether this message was sent during settings configuration
+  is_settings_message?: boolean;
 }

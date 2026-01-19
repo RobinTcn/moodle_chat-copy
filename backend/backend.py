@@ -132,8 +132,8 @@ def cache_scraped_data(username: str, data_type: str, raw_data: str):
     logging.info(f"Cached {data_type} scraped data (user: {username})")
 
 
-def _build_chat_response(response_text: str, username: str = None, settings: dict = None, suggested_events: list = None, ics_filename: str = None, ics: str = None, is_wizard_message: bool = False):
-    """Helper function to build chat response with wizard status."""
+def _build_chat_response(response_text: str, username: str = None, settings: dict = None, suggested_events: list = None, ics_filename: str = None, ics: str = None, is_wizard_message: bool = False, is_settings_message: bool = False):
+    """Helper function to build chat response with wizard and settings status."""
     result = {"response": response_text}
     
     # Add wizard status if username provided
@@ -145,6 +145,9 @@ def _build_chat_response(response_text: str, username: str = None, settings: dic
     
     # Add is_wizard_message flag
     result["is_wizard_message"] = is_wizard_message
+    
+    # Add is_settings_message flag
+    result["is_settings_message"] = is_settings_message
     
     # Add optional fields
     if settings:
@@ -475,7 +478,7 @@ async def chat(request: ChatRequest):
                 if days < 0 or days > 30:
                     msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
                     end_turn(timer, bot_message=msg, intent="settings")
-                    return _build_chat_response(msg, username)
+                    return _build_chat_response(msg, username, is_settings_message=True)
 
                 
                 # Save to state and ask next question
@@ -486,12 +489,12 @@ async def chat(request: ChatRequest):
                 
                 msg = f"Gut, ich erinnere dich {days} Tag(e) vor Aufgaben-Deadlines.\n\nWie viele Tage vor einer Klausur möchtest du erinnert werden? (z.B. 7 für eine Woche vorher)"
                 end_turn(timer, bot_message=msg, intent="settings")
-                return _build_chat_response(msg, username)
+                return _build_chat_response(msg, username, is_settings_message=True)
 
             except ValueError:
                 msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
                 end_turn(timer, bot_message=msg, intent="settings")
-                return _build_chat_response(msg, username)
+                return _build_chat_response(msg, username, is_settings_message=True)
 
         
         elif step == 'ask_exam_days':
@@ -501,7 +504,7 @@ async def chat(request: ChatRequest):
                 if days < 0 or days > 30:
                     msg = "Bitte gib eine Zahl zwischen 0 und 30 ein."
                     end_turn(timer, bot_message=msg, intent="settings")
-                    return _build_chat_response(msg, username)
+                    return _build_chat_response(msg, username, is_settings_message=True)
 
                 
                 # Save settings and clear state
@@ -514,18 +517,12 @@ async def chat(request: ChatRequest):
                 # Return settings to frontend for storage
                 msg = f"Alles klar! Deine Erinnerungseinstellungen wurden gespeichert:\n- Aufgaben: {task_days} Tag(e) vorher\n- Klausuren: {days} Tag(e) vorher\n\nIch werde dich entsprechend benachrichtigen!"
                 end_turn(timer, bot_message=msg, intent="settings")
-                return {
-                    "response": msg,
-                     "settings": {
-                     "reminder_days_tasks": task_days,
-                      "reminder_days_exams": days
-                     }
-                }
+                return _build_chat_response(msg, username, settings={"reminder_days_tasks": task_days, "reminder_days_exams": days}, is_settings_message=True)
 
             except ValueError:
                 msg = "Bitte gib eine gültige Zahl ein (z.B. 1, 3, 7)."
                 end_turn(timer, bot_message=msg, intent="settings")
-                return _build_chat_response(msg, username)
+                return _build_chat_response(msg, username, is_settings_message=True)
 
         
         # Fallback: should not reach here
@@ -534,7 +531,7 @@ async def chat(request: ChatRequest):
                 del conversation_state[username]
         msg = "Ein Fehler ist aufgetreten. Bitte versuche es erneut."
         end_turn(timer, bot_message=msg, intent="settings")
-        return _build_chat_response(msg, username)
+        return _build_chat_response(msg, username, is_settings_message=True)
 
 
     # While wizard is active: skip intent detection; only allow explicit stop keyword
@@ -731,7 +728,7 @@ async def chat(request: ChatRequest):
             }
         msg = "**Lass uns deine Erinnerungseinstellungen konfigurieren!** \n\nWie viele Tage vor einer Aufgaben-Deadline möchtest du erinnert werden? (z.B. 1 für einen Tag vorher, 3 für drei Tage vorher)"
         end_turn(timer, bot_message=msg, intent=intent)
-        return _build_chat_response(msg, username)
+        return _build_chat_response(msg, username, is_settings_message=True)
 
     elif intent == "greeting":
         msg = "Hallo! Wie kann ich dir helfen?"
