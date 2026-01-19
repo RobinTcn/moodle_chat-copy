@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google';
 
 interface CalendarEvent {
@@ -183,135 +183,133 @@ function CalendarContent() {
 	}, [user, accessToken, events, googleEvents]);
 
 	// Notification system: Check for upcoming deadlines
+	const checkReminders = useCallback(() => {
+		console.log('[Reminder Check] Starting reminder check...');
+
+		// Only check if we have notification permission
+		if (!('Notification' in window) || Notification.permission !== 'granted') {
+			console.log('[Reminder Check] No notification permission');
+			return;
+		}
+
+		// Load reminder settings
+		let settings;
+		try {
+			const stored = localStorage.getItem('reminder_settings');
+			if (!stored) {
+				console.log('[Reminder Check] No settings configured yet');
+				return;
+			}
+			settings = JSON.parse(stored);
+			console.log('[Reminder Check] Settings loaded:', settings);
+		} catch (e) {
+			console.error('[Reminder Check] Failed to load reminder settings:', e);
+			return;
+		}
+
+		const taskDays = settings.reminder_days_tasks || 1;
+		const examDays = settings.reminder_days_exams || 7;
+		console.log(`[Reminder Check] Task days: ${taskDays}, Exam days: ${examDays}`);
+
+		// Get all events (local + Google)
+		const allEvents = [...events, ...googleEvents];
+		console.log(`[Reminder Check] Found ${allEvents.length} events total`);
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		console.log(`[Reminder Check] Today is: ${today.toISOString()}`);
+
+		// Track which reminders we've already shown (stored in localStorage)
+		let shownReminders: string[] = [];
+		try {
+			const stored = localStorage.getItem('shown_reminders');
+			if (stored) shownReminders = JSON.parse(stored);
+		} catch (e) {
+			// ignore
+		}
+
+		allEvents.forEach(ev => {
+			console.log(`[Reminder Check] Checking event: "${ev.text}" on ${ev.date}`);
+			const eventDate = new Date(ev.date);
+			eventDate.setHours(0, 0, 0, 0);
+
+			const diffTime = eventDate.getTime() - today.getTime();
+			const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+			console.log(`[Reminder Check] Days until event: ${diffDays}`);
+
+			// Skip if event is in the past
+			if (diffDays < 0) {
+				console.log(`[Reminder Check] Event is in the past, skipping`);
+				return;
+			}
+
+			// Determine if it's an exam (contains keywords) or task
+			const isExam = /klausur|prüfung|exam|test/i.test(ev.text);
+			const reminderDays = isExam ? examDays : taskDays;
+			console.log(`[Reminder Check] Is exam: ${isExam}, Reminder days: ${reminderDays}`);
+
+			// Check if we should remind today
+			if (diffDays === reminderDays || diffDays === 0) {
+				console.log(`[Reminder Check] Should send reminder for this event!`);
+				// Create unique ID for this reminder
+				const reminderId = `${ev.date}_${ev.text}_${diffDays}`;
+
+				// Skip if already shown
+				if (shownReminders.includes(reminderId)) {
+					console.log(`[Reminder Check] Reminder already shown: ${reminderId}`);
+					return;
+				}
+
+				// Show notification
+				let message;
+				if (diffDays === 0) {
+					message = `Heute: ${ev.text}`;
+				} else if (diffDays === 1) {
+					message = `Morgen: ${ev.text}`;
+				} else {
+					message = `In ${diffDays} Tagen: ${ev.text}`;
+				}
+
+				console.log(`[Reminder Check] Sending notification: "${message}"`);
+				new Notification('StudiBot Erinnerung 📅', {
+					body: message,
+					icon: '/favicon.ico',
+					badge: '/favicon.ico',
+					requireInteraction: false
+				});
+
+				// Mark as shown
+				shownReminders.push(reminderId);
+				console.log(`[Reminder Check] Reminder sent and marked as shown`);
+			} else {
+				console.log(`[Reminder Check] Not the right day yet (need: ${reminderDays}, got: ${diffDays})`);
+			}
+		});
+
+		console.log(`[Reminder Check] Total reminders shown: ${shownReminders.length}`);
+
+		// Save shown reminders
+		try {
+			localStorage.setItem('shown_reminders', JSON.stringify(shownReminders));
+		} catch (e) {
+			// ignore
+		}
+	}, [events, googleEvents]);
+
+	// Request notification permission on mount
 	useEffect(() => {
-		// Request notification permission on mount
 		if ('Notification' in window && Notification.permission === 'default') {
 			Notification.requestPermission().then(permission => {
 				console.log('Notification permission:', permission);
 			});
 		}
+	}, []);
 
-		// Check for reminders every hour
-		const checkReminders = () => {
-			console.log('[Reminder Check] Starting reminder check...');
-			
-			// Only check if we have notification permission
-			if (!('Notification' in window) || Notification.permission !== 'granted') {
-				console.log('[Reminder Check] No notification permission');
-				return;
-			}
-
-			// Load reminder settings
-			let settings;
-			try {
-				const stored = localStorage.getItem('reminder_settings');
-				if (!stored) {
-					console.log('[Reminder Check] No settings configured yet');
-					return;
-				}
-				settings = JSON.parse(stored);
-				console.log('[Reminder Check] Settings loaded:', settings);
-			} catch (e) {
-				console.error('[Reminder Check] Failed to load reminder settings:', e);
-				return;
-			}
-
-			const taskDays = settings.reminder_days_tasks || 1;
-			const examDays = settings.reminder_days_exams || 7;
-			console.log(`[Reminder Check] Task days: ${taskDays}, Exam days: ${examDays}`);
-
-			// Get all events (local + Google)
-			const allEvents = [...events, ...googleEvents];
-			console.log(`[Reminder Check] Found ${allEvents.length} events total`);
-			const today = new Date();
-			today.setHours(0, 0, 0, 0);
-			console.log(`[Reminder Check] Today is: ${today.toISOString()}`);
-
-			// Track which reminders we've already shown (stored in localStorage)
-			let shownReminders: string[] = [];
-			try {
-				const stored = localStorage.getItem('shown_reminders');
-				if (stored) shownReminders = JSON.parse(stored);
-			} catch (e) {
-				// ignore
-			}
-
-			allEvents.forEach(ev => {
-				console.log(`[Reminder Check] Checking event: "${ev.text}" on ${ev.date}`);
-				const eventDate = new Date(ev.date);
-				eventDate.setHours(0, 0, 0, 0);
-				
-				const diffTime = eventDate.getTime() - today.getTime();
-				const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-				console.log(`[Reminder Check] Days until event: ${diffDays}`);
-
-				// Skip if event is in the past
-				if (diffDays < 0) {
-					console.log(`[Reminder Check] Event is in the past, skipping`);
-					return;
-				}
-
-				// Determine if it's an exam (contains keywords) or task
-				const isExam = /klausur|prüfung|exam|test/i.test(ev.text);
-				const reminderDays = isExam ? examDays : taskDays;
-				console.log(`[Reminder Check] Is exam: ${isExam}, Reminder days: ${reminderDays}`);
-
-				// Check if we should remind today
-				if (diffDays === reminderDays || diffDays === 0) {
-					console.log(`[Reminder Check] Should send reminder for this event!`);
-					// Create unique ID for this reminder
-					const reminderId = `${ev.date}_${ev.text}_${diffDays}`;
-					
-					// Skip if already shown
-					if (shownReminders.includes(reminderId)) {
-						console.log(`[Reminder Check] Reminder already shown: ${reminderId}`);
-						return;
-					}
-
-					// Show notification
-					let message;
-					if (diffDays === 0) {
-						message = `Heute: ${ev.text}`;
-					} else if (diffDays === 1) {
-						message = `Morgen: ${ev.text}`;
-					} else {
-						message = `In ${diffDays} Tagen: ${ev.text}`;
-					}
-
-					console.log(`[Reminder Check] Sending notification: "${message}"`);
-					new Notification('StudiBot Erinnerung 📅', {
-						body: message,
-						icon: '/favicon.ico',
-						badge: '/favicon.ico',
-						requireInteraction: false
-					});
-
-					// Mark as shown
-					shownReminders.push(reminderId);
-					console.log(`[Reminder Check] Reminder sent and marked as shown`);
-				} else {
-					console.log(`[Reminder Check] Not the right day yet (need: ${reminderDays}, got: ${diffDays})`);
-				}
-			});
-
-			console.log(`[Reminder Check] Total reminders shown: ${shownReminders.length}`);
-
-			// Save shown reminders
-			try {
-				localStorage.setItem('shown_reminders', JSON.stringify(shownReminders));
-			} catch (e) {
-				// ignore
-			}
-		};
-
-		// Check immediately on mount
+	// Run reminders immediately and hourly
+	useEffect(() => {
 		checkReminders();
-
-		// Then check every hour
 		const interval = setInterval(checkReminders, 60 * 60 * 1000);
-
 		return () => clearInterval(interval);
-	}, [events, googleEvents]);
+	}, [checkReminders]);
 
 	// helper to add an event from UI
 	const addEvent = (dateISO: string, text: string) => {
@@ -741,8 +739,11 @@ function CalendarContent() {
 							</button>
 						</div>
 						<div className="text-lg font-medium text-center px-4">{monthName} {year}</div>
-						<div className="absolute right-0">
-							<button onClick={nextMonth} aria-label="Nächster Monat" className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 mr-1">
+						<div className="absolute right-0 flex gap-2">
+							<button onClick={() => checkReminders()} aria-label="Erinnerungen jetzt senden" className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600">
+								Jetzt erinnern
+							</button>
+							<button onClick={nextMonth} aria-label="Nächster Monat" className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300">
 								<svg className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
 									<path d="M8 16 L14 10 L8 4" />
 								</svg>
