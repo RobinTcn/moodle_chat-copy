@@ -492,7 +492,7 @@ async def chat(request: ChatRequest):
     # Fast keyword-based intent detection to avoid unnecessary LLM calls
     if intent is None:
         # Check for settings/reminders
-        if msg_low == "/settings":
+        if any(msg_low.strip() == kw for kw in ["settings", "/settings", "einstellungen", "erinnerungseinstellungen"]):
             intent = "settings"
         elif any(msg_low.strip() == kw for kw in stop_keywords):
             intent = "stop_exam_wizard"
