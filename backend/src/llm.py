@@ -73,7 +73,7 @@ def ask_chatgpt_moodle(termine: str, api_key: Optional[str]) -> str:
             {"role": "user", "content": user_message}
         ]
     )
-    resp_text = response.choices[0].message.content + "\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
+    resp_text = response.choices[0].message.content + "\n\nSoll ich dir die Termine auch in deinen Kalender eintragen?"
     return resp_text
 
 
